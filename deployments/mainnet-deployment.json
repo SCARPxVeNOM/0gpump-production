@@ -1,0 +1,16 @@
+{
+  "network": "0g-mainnet",
+  "chainId": 16661,
+  "deployer": "0x1aB7d5eCBe2c551eBfFdfA06661B77cc60dbd425",
+  "deployedAt": "2025-11-04T08:32:13.974Z",
+  "contracts": {
+    "weth": "0x086de5895811550D9118112B6477F61462fe7b34",
+    "uniswapFactory": "0xFb1A309B37f3AEe5B4A8c0fB4135b3732780Ab69",
+    "uniswapRouter": "0x2Bb6c5118CB65C5E8cA774fCE59cd08024E9ad76",
+    "autoTradingFactory": "0x504CaC722dd52ae87EA6594F8640708EF14939Df",
+    "appFactory": "0x18D1Bf1fa39E1598CC091c04A72b5BA16F4958ef",
+    "treasury": "0x1ab7d5ecbe2c551ebffdfa06661b77cc60dbd425",
+    "defaultFeeBps": 500,
+    "ogToken": "0x9D69091eC18d2f820B8a0cE35D0fa19A2Bee7563"
+  }
+}

@@ -7,7 +7,7 @@ let walletAddress;
 
 async function getBroker() {
   if (brokerInstance) return { broker: brokerInstance, walletAddress };
-  const rpc = process.env.OG_CHAIN_RPC || process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai';
+  const rpc = process.env.OG_CHAIN_RPC || process.env.OG_RPC || 'https://evmrpc.0g.ai';
   const provider = new JsonRpcProvider(rpc);
   const pk = process.env.PRIVATE_KEY;
   if (!pk) throw new Error('PRIVATE_KEY not set');

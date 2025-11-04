@@ -1,0 +1,16 @@
+{
+  "contractName": "OGToken",
+  "address": "0x9D69091eC18d2f820B8a0cE35D0fa19A2Bee7563",
+  "network": "0g-mainnet",
+  "chainId": 16661,
+  "deployer": "0x1aB7d5eCBe2c551eBfFdfA06661B77cc60dbd425",
+  "constructorArgs": {
+    "name": "0G Storage Token",
+    "symbol": "0GST",
+    "initialSupply": "1000000000000000000000000",
+    "description": "A token demonstrating 0G Storage integration on mainnet",
+    "metadataRootHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "imageRootHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "deploymentTime": "2025-11-04T08:33:24.761Z"
+}

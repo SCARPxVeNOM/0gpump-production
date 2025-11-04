@@ -1,0 +1,9 @@
+{
+  "network": "0g-mainnet",
+  "chainId": 16661,
+  "address": "0x18D1Bf1fa39E1598CC091c04A72b5BA16F4958ef",
+  "treasury": "0x1ab7d5ecbe2c551ebffdfa06661b77cc60dbd425",
+  "defaultFeeBps": 500,
+  "deployer": "0x1aB7d5eCBe2c551eBfFdfA06661B77cc60dbd425",
+  "deployedAt": "2025-11-04T08:33:24.761Z"
+}

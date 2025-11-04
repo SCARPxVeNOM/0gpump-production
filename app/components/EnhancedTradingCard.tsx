@@ -5,6 +5,7 @@ import { useAccount, usePublicClient } from 'wagmi'
 import { ethers, BrowserProvider } from 'ethers'
 import { newBondingCurveTradingService } from '../../lib/newBondingCurveTradingService'
 import { Info, X, Copy, ExternalLink } from 'lucide-react'
+import CoinImage from './CoinImage'
 
 interface EnhancedTradingCardProps {
   tokenAddress: string
@@ -106,25 +107,25 @@ export default function EnhancedTradingCard({
   useEffect(() => {
     if (isConnected) {
       (async () => {
-        try {
-          const eth = (typeof window !== 'undefined') ? (window as any).ethereum : undefined
-          if (!eth) return
+      try {
+        const eth = (typeof window !== 'undefined') ? (window as any).ethereum : undefined
+        if (!eth) return
           const ethersProvider = new BrowserProvider(eth)
-          setProvider(ethersProvider)
+        setProvider(ethersProvider)
           await newBondingCurveTradingService.initialize(ethersProvider)
         
-          // Use curve address from props if available
-          if (curveAddress && curveAddress !== '' && curveAddress !== 'undefined') {
-            setCurveAddressState(curveAddress)
-            loadCurveInfo(curveAddress)
-          } else if (tokenAddress && tokenAddress !== '' && tokenAddress !== 'undefined') {
-            // Fallback: try to use token address (this won't work for trading)
-            console.warn('⚠️ No curve address provided - trading will not work')
-            setCurveAddressState(null)
-          }
-        } catch (error) {
-          console.warn('Failed to initialize services:', error)
+        // Use curve address from props if available
+        if (curveAddress && curveAddress !== '' && curveAddress !== 'undefined') {
+          setCurveAddressState(curveAddress)
+          loadCurveInfo(curveAddress)
+        } else if (tokenAddress && tokenAddress !== '' && tokenAddress !== 'undefined') {
+          // Fallback: try to use token address (this won't work for trading)
+          console.warn('⚠️ No curve address provided - trading will not work')
+          setCurveAddressState(null)
         }
+      } catch (error) {
+        console.warn('Failed to initialize services:', error)
+      }
       })()
     }
   }, [isConnected, tokenAddress, curveAddress])
@@ -318,9 +319,26 @@ export default function EnhancedTradingCard({
       <div className="space-y-4 bg-sky-100 rounded-2xl p-4 border-4 border-black">
         {/* Header */}
         <div className="flex items-center space-x-4 mb-6">
-          <div className="w-16 h-16 rounded-full flex items-center justify-center text-white text-2xl font-bold bg-slate-900 border-4 border-black shadow-[4px_4px_0_#000]">
-            {tokenSymbol.charAt(0)}
-          </div>
+          <CoinImage 
+            coin={{
+              name: tokenName,
+              symbol: tokenSymbol,
+              imageUrl: imageUrl,
+              // Extract imageHash from URL if it's in the format /download/{hash}
+              imageHash: imageUrl?.includes('/download/') 
+                ? imageUrl.split('/download/')[1].split('?')[0] 
+                : imageUrl?.startsWith('http') 
+                  ? undefined 
+                  : imageUrl,
+              imageRootHash: imageUrl?.includes('/download/') 
+                ? imageUrl.split('/download/')[1].split('?')[0] 
+                : imageUrl?.startsWith('http') 
+                  ? undefined 
+                  : imageUrl
+            } as any}
+            size="lg"
+            className="border-4 border-black shadow-[4px_4px_0_#000]"
+          />
           <div className="flex-1">
             <div className="flex items-center gap-3">
               <h2 className="text-2xl font-extrabold text-gray-900">
@@ -520,9 +538,24 @@ export default function EnhancedTradingCard({
             <div className="p-6 space-y-6">
               {/* Token Basic Info */}
               <div className="flex items-center space-x-3">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-xl font-bold">
-                  {tokenSymbol.charAt(0)}
-                </div>
+                <CoinImage 
+                  coin={{
+                    name: tokenName,
+                    symbol: tokenSymbol,
+                    imageUrl: imageUrl,
+                    imageHash: imageUrl?.includes('/download/') 
+                      ? imageUrl.split('/download/')[1].split('?')[0] 
+                      : imageUrl?.startsWith('http') 
+                        ? undefined 
+                        : imageUrl,
+                    imageRootHash: imageUrl?.includes('/download/') 
+                      ? imageUrl.split('/download/')[1].split('?')[0] 
+                      : imageUrl?.startsWith('http') 
+                        ? undefined 
+                        : imageUrl
+                  } as any}
+                  size="md"
+                />
                 <div>
                   <h3 className="text-xl font-bold text-gray-900">{tokenName}</h3>
                   <div className="flex gap-2 mt-1">

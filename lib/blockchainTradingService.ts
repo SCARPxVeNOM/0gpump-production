@@ -97,7 +97,7 @@ class BlockchainTradingService {
 
     // Fallback read provider across two RPCs
     try {
-      const primary = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_EVM_RPC) || 'https://evmrpc-testnet.0g.ai'
+      const primary = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_EVM_RPC) || 'https://evmrpc.0g.ai'
       // Use a single reliable endpoint to avoid DNS issues
       const readers = [ new ethers.providers.JsonRpcProvider(primary) ]
       this.readProvider = new ethers.providers.FallbackProvider(readers, 1)

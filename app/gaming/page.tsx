@@ -7,7 +7,7 @@ import { ethers } from 'ethers'
 
 export default function GamingPage() {
   const { address } = useAccount()
-  const [activeTab, setActiveTab] = useState<'pumpplay'|'meme-royale'|'mines'|'arcade'>('pumpplay')
+  const [activeTab, setActiveTab] = useState<'pumpplay'|'meme-royale'|'mines'|'arcade'|'roulette'>('pumpplay')
   const backend = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000'
   
   // Platform Coins & User Holdings
@@ -54,19 +54,42 @@ export default function GamingPage() {
   const [recent, setRecent] = useState<any[]>([])
   const [isFlipping, setIsFlipping] = useState(false)
   
+  // Roulette State
+  const [rouletteGame, setRouletteGame] = useState<any>(null)
+  const [rouletteBets, setRouletteBets] = useState<{[key: string]: number}>({})
+  const [rouletteToken, setRouletteToken] = useState<string>('')
+  const [rouletteTotalBet, setRouletteTotalBet] = useState<number>(0)
+  const [isSpinning, setIsSpinning] = useState(false)
+  const [spinningNumber, setSpinningNumber] = useState<number | null>(null)
+  const [wheelRotation, setWheelRotation] = useState<number>(0)
+  const [rouletteHistory, setRouletteHistory] = useState<number[]>([])
+  const [rouletteResult, setRouletteResult] = useState<any>(null)
+  
   // 0G DA Provenance State
   const [lastProvenanceHash, setLastProvenanceHash] = useState<string|null>(null)
   
   // Wallet Balance Tracking
   const [nativeBalance, setNativeBalance] = useState<string>('0.0')
   const [isLoadingBalance, setIsLoadingBalance] = useState(false)
+  
+  // Multiplayer Matchmaking State
+  const [matchmakingStatus, setMatchmakingStatus] = useState<{
+    gameType: string
+    status: 'idle'|'waiting'|'matched'|'error'
+    lobbyId?: string
+    matchId?: string
+    opponentAddress?: string
+    message?: string
+  }>({ gameType: '', status: 'idle' })
+  const [matchType, setMatchType] = useState<'solo'|'p2p'|'pool'>('p2p') // Default to P2P for multiplayer
+  const [matchmakingInterval, setMatchmakingInterval] = useState<NodeJS.Timeout | null>(null)
 
   // Load native OG balance
   const loadNativeBalance = async () => {
     if (!address) return
     try {
       setIsLoadingBalance(true)
-      const provider = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_OG_RPC || 'https://evmrpc-testnet.0g.ai')
+      const provider = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_OG_RPC || process.env.NEXT_PUBLIC_EVM_RPC || 'https://evmrpc.0g.ai')
       const balance = await provider.getBalance(address)
       setNativeBalance(ethers.formatEther(balance))
       setIsLoadingBalance(false)
@@ -157,6 +180,117 @@ export default function GamingPage() {
     return () => clearInterval(interval)
   }, [activeTab, backend, coinflipResult])
 
+  // Universal Matchmaking Function
+  const startMatchmaking = async (gameType: string, gameParams: any, betAmount: number, tokenAddress: string, txHash: string) => {
+    if (!address) return alert('Connect wallet first')
+    
+    setMatchmakingStatus({ gameType, status: 'waiting', message: 'Searching for opponent...' })
+    
+    try {
+      const res = await fetch(`${backend}/gaming/matchmake`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gameType,
+          userAddress: address,
+          betAmount,
+          tokenAddress,
+          txHash,
+          gameParams,
+          matchType: 'p2p'
+        })
+      })
+      
+      const data = await res.json()
+      
+      if (!data.success) {
+        setMatchmakingStatus({ gameType, status: 'error', message: data.error || 'Matchmaking failed' })
+        return false
+      }
+      
+      if (data.matched) {
+        // Match found!
+        setMatchmakingStatus({
+          gameType,
+          status: 'matched',
+          matchId: data.matchId,
+          opponentAddress: data.opponentAddress,
+          message: `Matched with ${data.opponentAddress.slice(0, 6)}...${data.opponentAddress.slice(-4)}!`
+        })
+        
+        // Clear polling if any
+        if (matchmakingInterval) {
+          clearInterval(matchmakingInterval)
+          setMatchmakingInterval(null)
+        }
+        
+        return { matched: true, matchId: data.matchId, opponentAddress: data.opponentAddress, gameParams: data.gameParams }
+      } else {
+        // Waiting for opponent
+        setMatchmakingStatus({
+          gameType,
+          status: 'waiting',
+          lobbyId: data.lobbyId,
+          message: 'Waiting for opponent to join...'
+        })
+        
+        // Start polling for match status
+        const pollInterval = setInterval(async () => {
+          try {
+            const checkRes = await fetch(`${backend}/gaming/lobbies/${gameType}?tokenAddress=${tokenAddress}&betAmount=${betAmount}`)
+            const checkData = await checkRes.json()
+            
+            // Check if we found a match by looking for a lobby with our address as opponent
+            const myLobby = checkData.lobbies?.find((l: any) => 
+              l.lobbyId === data.lobbyId && l.opponentAddress === address.toLowerCase()
+            )
+            
+            if (myLobby && myLobby.matchId) {
+              clearInterval(pollInterval)
+              setMatchmakingInterval(null)
+              setMatchmakingStatus({
+                gameType,
+                status: 'matched',
+                matchId: myLobby.matchId,
+                opponentAddress: myLobby.creatorAddress,
+                message: `Matched! Starting game...`
+              })
+            }
+          } catch (e) {
+            console.error('Polling error:', e)
+          }
+        }, 2000) // Poll every 2 seconds
+        
+        setMatchmakingInterval(pollInterval)
+        
+        // Auto-stop polling after 5 minutes
+        setTimeout(() => {
+          if (pollInterval) {
+            clearInterval(pollInterval)
+            setMatchmakingInterval(null)
+            if (matchmakingStatus.status === 'waiting') {
+              setMatchmakingStatus({ gameType, status: 'error', message: 'Matchmaking timed out' })
+            }
+          }
+        }, 5 * 60 * 1000)
+        
+        return { matched: false, lobbyId: data.lobbyId }
+      }
+    } catch (e: any) {
+      setMatchmakingStatus({ gameType, status: 'error', message: e.message || 'Matchmaking failed' })
+      return false
+    }
+  }
+
+  // Stop matchmaking
+  const stopMatchmaking = () => {
+    if (matchmakingInterval) {
+      clearInterval(matchmakingInterval)
+      setMatchmakingInterval(null)
+    }
+    setMatchmakingStatus({ gameType: '', status: 'idle' })
+  }
+
   // PumpPlay: Place Bet
   const placeBet = async () => {
     if (!address || !selectedRound || !betCoin || !betToken) {
@@ -191,6 +325,25 @@ export default function GamingPage() {
       await tx.wait()
       console.log('Stake transferred:', tx.hash)
       
+      let matchId = null
+      let matchTypeFinal = matchType
+      
+      // P2P Matchmaking for PumpPlay
+      if (matchType === 'p2p') {
+        const matchResult = await startMatchmaking('pumpplay', { coinId: betCoin, roundId: selectedRound.id }, parseFloat(betAmount), betToken, tx.hash)
+        
+        if (matchResult && typeof matchResult === 'object' && 'matched' in matchResult) {
+          if (matchResult.matched) {
+            matchId = matchResult.matchId
+            matchTypeFinal = 'p2p'
+          } else {
+            // Still waiting - will place bet once matched
+            setIsBetting(false)
+            return
+          }
+        }
+      }
+      
       // Record bet
       const res = await fetch(`${backend}/gaming/pumpplay/bet`, {
         method: 'POST',
@@ -201,12 +354,18 @@ export default function GamingPage() {
           coinId: betCoin,
           amount: parseFloat(betAmount),
           tokenAddress: betToken,
-          txHash: tx.hash
+          txHash: tx.hash,
+          matchId,
+          matchType: matchTypeFinal
         })
       })
       const data = await res.json()
       if (data.success) {
-        alert(`✅ Bet placed successfully!\n\nYou bet ${betAmount} tokens on ${selectedRound.coinDetails.find((c:any) => c.id == betCoin)?.symbol}\n\nWait for round to end!`)
+        const coinSymbol = selectedRound.coinDetails?.find((c:any) => c.id == betCoin)?.symbol || betCoin
+        const successMsg = matchTypeFinal === 'p2p'
+          ? `✅ P2P Bet placed!\n\nMatched with opponent. You bet ${betAmount} tokens on ${coinSymbol}.\n\nWinner takes both stakes when round ends!`
+          : `✅ Bet placed successfully!\n\nYou bet ${betAmount} tokens on ${coinSymbol}\n\nWait for round to end!`
+        alert(successMsg)
         // Reload rounds and refresh balances
         fetch(`${backend}/gaming/pumpplay/rounds`).then(r => r.json()).then(d => setRounds(d.rounds || []))
         setTimeout(() => loadCoinsData(), 2000)
@@ -261,6 +420,29 @@ export default function GamingPage() {
       await transferTx.wait()
       console.log('Stake transferred:', transferTx.hash)
       
+      let matchId = null
+      let matchTypeFinal = matchType
+      
+      // P2P Matchmaking for Meme Royale
+      if (matchType === 'p2p') {
+        const matchResult = await startMatchmaking('meme-royale', { 
+          leftCoinId: leftCoin.id, 
+          rightCoinId: rightCoin.id, 
+          stakeSide 
+        }, parseFloat(stakeAmount), stakeToken, transferTx.hash)
+        
+        if (matchResult && typeof matchResult === 'object' && 'matched' in matchResult) {
+          if (matchResult.matched) {
+            matchId = matchResult.matchId
+            matchTypeFinal = 'p2p'
+          } else {
+            // Still waiting - will start battle once matched
+            setIsBattling(false)
+            return
+          }
+        }
+      }
+      
       // Start AI battle
       const res = await fetch(`${backend}/gaming/meme-royale`, {
         method: 'POST',
@@ -272,7 +454,9 @@ export default function GamingPage() {
           stakeAmount: parseFloat(stakeAmount),
           stakeSide,
           tokenAddress: stakeToken,
-          txHash: transferTx.hash
+          txHash: transferTx.hash,
+          matchId,
+          matchType: matchTypeFinal
         })
       })
       const data = await res.json()
@@ -282,9 +466,15 @@ export default function GamingPage() {
         const userWon = (stakeSide === 'left' && data.winner === 'left') || (stakeSide === 'right' && data.winner === 'right')
         
         if (userWon) {
-          alert(`🎉 YOUR FIGHTER WON!\n\nWinner: ${data.winner === 'left' ? leftCoin.symbol : rightCoin.symbol}\n\nPayout: ${parseFloat(stakeAmount) * 1.8} tokens (1.8x)!\nTx: ${data.payoutTx?.slice(0, 10)}...`)
+          const winMsg = matchTypeFinal === 'p2p'
+            ? `🎉 YOU WON THE P2P BATTLE!\n\nWinner: ${data.winner === 'left' ? leftCoin.symbol : rightCoin.symbol}\n\nYou beat your opponent! Winner takes both stakes!\n\n✅ Game verified on 0G DA`
+            : `🎉 YOUR FIGHTER WON!\n\nWinner: ${data.winner === 'left' ? leftCoin.symbol : rightCoin.symbol}\n\nPayout: ${parseFloat(stakeAmount) * 1.8} tokens (1.8x)!\nTx: ${data.payoutTx?.slice(0, 10)}...`
+          alert(winMsg)
         } else {
-          alert(`😢 Your Fighter Lost\n\nWinner: ${data.winner === 'left' ? leftCoin.symbol : rightCoin.symbol}\n\nBetter luck next time!`)
+          const loseMsg = matchTypeFinal === 'p2p'
+            ? `😢 P2P Battle Lost\n\nWinner: ${data.winner === 'left' ? leftCoin.symbol : rightCoin.symbol}\n\nOpponent won! Better luck next time!\n\n✅ Game verified on 0G DA`
+            : `😢 Your Fighter Lost\n\nWinner: ${data.winner === 'left' ? leftCoin.symbol : rightCoin.symbol}\n\nBetter luck next time!`
+          alert(loseMsg)
         }
         
         // Refresh balances immediately after battle
@@ -333,6 +523,25 @@ export default function GamingPage() {
       await transferTx.wait()
       console.log('Stake transferred:', transferTx.hash)
       
+      let matchId = null
+      let matchTypeFinal = matchType
+      
+      // P2P Matchmaking
+      if (matchType === 'p2p') {
+        const matchResult = await startMatchmaking('coinflip', { guess: flipGuess }, parseFloat(flipWager), flipToken, transferTx.hash)
+        
+        if (matchResult && typeof matchResult === 'object' && 'matched' in matchResult) {
+          if (matchResult.matched) {
+            matchId = matchResult.matchId
+            matchTypeFinal = 'p2p'
+          } else {
+            // Still waiting - user will flip once matched
+            setIsFlipping(false)
+            return
+          }
+        }
+      }
+      
       const res = await fetch(`${backend}/gaming/coinflip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -341,7 +550,9 @@ export default function GamingPage() {
           wager: parseFloat(flipWager), 
           guess: flipGuess,
           tokenAddress: flipToken,
-          txHash: transferTx.hash
+          txHash: transferTx.hash,
+          matchId,
+          matchType: matchTypeFinal
         })
       })
       const data = await res.json()
@@ -352,9 +563,15 @@ export default function GamingPage() {
       }
       
       if (data.outcome === 'win') {
-        alert(`🎉 YOU WON!\n\nResult: ${data.result.toUpperCase()}\n\nPayout of ${parseFloat(flipWager) * 2} tokens sent!\nTx: ${data.payoutTx?.slice(0, 10)}...\n\n✅ Game verified on 0G DA`)
+        const payoutMsg = matchTypeFinal === 'p2p' 
+          ? `🎉 YOU WON!\n\nP2P Match: You beat your opponent!\nResult: ${data.result.toUpperCase()}\nWinner takes both stakes!\n\n✅ Game verified on 0G DA`
+          : `🎉 YOU WON!\n\nResult: ${data.result.toUpperCase()}\n\nPayout of ${parseFloat(flipWager) * 2} tokens sent!\nTx: ${data.payoutTx?.slice(0, 10)}...\n\n✅ Game verified on 0G DA`
+        alert(payoutMsg)
       } else {
-        alert(`😢 You Lost\n\nResult: ${data.result.toUpperCase()}\n\nBetter luck next time!\n\n✅ Game verified on 0G DA`)
+        const loseMsg = matchTypeFinal === 'p2p'
+          ? `😢 You Lost\n\nP2P Match: Opponent won!\nResult: ${data.result.toUpperCase()}\nBetter luck next time!\n\n✅ Game verified on 0G DA`
+          : `😢 You Lost\n\nResult: ${data.result.toUpperCase()}\n\nBetter luck next time!\n\n✅ Game verified on 0G DA`
+        alert(loseMsg)
       }
       
       // Refresh balances immediately after game ends
@@ -365,6 +582,109 @@ export default function GamingPage() {
       alert(e.message || 'Coinflip failed')
     } finally {
       setIsFlipping(false)
+    }
+  }
+
+  // Roulette Handlers
+  const handleRouletteBet = (betType: string, amount: number) => {
+    if (!rouletteToken) {
+      alert('Please select a token first')
+      return
+    }
+    
+    const currentBet = rouletteBets[betType] || 0
+    const newBet = currentBet + amount
+    setRouletteBets({ ...rouletteBets, [betType]: newBet })
+    setRouletteTotalBet(rouletteTotalBet + amount)
+  }
+
+  const handleSpinRoulette = async () => {
+    if (!address) return alert('Connect wallet first')
+    if (!rouletteToken) return alert('Select a token to bet with')
+    if (rouletteTotalBet === 0 || Object.keys(rouletteBets).length === 0) {
+      return alert('Place at least one bet before spinning')
+    }
+
+    setIsSpinning(true)
+    setRouletteResult(null)
+    
+    try {
+      // Transfer tokens to backend
+      const provider = new ethers.BrowserProvider((window as any).ethereum)
+      const signer = await provider.getSigner()
+      const tokenContract = new ethers.Contract(
+        rouletteToken,
+        ['function transfer(address,uint256) returns (bool)'],
+        signer
+      )
+      
+      const amount = ethers.parseEther(rouletteTotalBet.toString())
+      const transferTx = await tokenContract.transfer(backend, amount)
+      await transferTx.wait()
+      
+      // Animate wheel spin
+      const spins = 5 + Math.random() * 3 // 5-8 full spins
+      const randomNumber = Math.floor(Math.random() * 37) // 0-36
+      const finalRotation = 360 * spins + (randomNumber * 360 / 37)
+      
+      setWheelRotation(finalRotation)
+      setIsSpinning(true)
+      
+      // Simulate ball moving during spin
+      let currentPos = 0
+      const spinInterval = setInterval(() => {
+        currentPos = (currentPos + 1) % 37
+        setSpinningNumber(currentPos)
+      }, 50)
+      
+      // Call backend to get result
+      const res = await fetch(`${backend}/gaming/roulette/spin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userAddress: address,
+          bets: rouletteBets,
+          totalBet: rouletteTotalBet,
+          tokenAddress: rouletteToken,
+          txHash: transferTx.hash
+        })
+      })
+      
+      const data = await res.json()
+      
+      // Wait for spin animation to complete
+      setTimeout(() => {
+        clearInterval(spinInterval)
+        setSpinningNumber(data.winningNumber)
+        setWheelRotation(finalRotation)
+        setRouletteResult({
+          number: data.winningNumber,
+          color: data.color,
+          parity: data.parity,
+          winnings: data.winnings || 0
+        })
+        setRouletteHistory([...rouletteHistory, data.winningNumber])
+        setIsSpinning(false)
+        
+        // Clear bets after result
+        setRouletteBets({})
+        setRouletteTotalBet(0)
+        
+        if (data.winnings > 0) {
+          alert(`🎉 You won ${data.winnings.toFixed(4)} tokens!`)
+        } else {
+          alert(`😢 Ball landed on ${data.winningNumber}. Better luck next time!`)
+        }
+        
+        // Refresh balances
+        setTimeout(() => loadCoinsData(), 2000)
+      }, 3000) // 3 second spin animation
+      
+    } catch (e: any) {
+      console.error('Roulette spin error:', e)
+      alert(e.message || 'Spin failed')
+      setIsSpinning(false)
+      setSpinningNumber(null)
     }
   }
 
@@ -562,6 +882,16 @@ export default function GamingPage() {
           >
             🎰 COINFLIP
           </button>
+          <button
+            onClick={() => setActiveTab('roulette')}
+            className={`px-8 py-4 rounded-2xl font-black text-lg transition-all duration-300 transform hover:scale-105 ${
+              activeTab === 'roulette'
+                ? 'bg-gradient-to-r from-yellow-500 via-red-600 to-pink-600 text-white shadow-[0_0_30px_rgba(234,179,8,0.6)] border-2 border-yellow-400'
+                : 'bg-gray-800/50 text-yellow-300 hover:bg-gray-700/70 border-2 border-yellow-500/30 backdrop-blur-sm'
+            }`}
+          >
+            🎡 ROULETTE
+          </button>
         </div>
 
         {/* PumpPlay Tab - Neon Style */}
@@ -680,13 +1010,66 @@ export default function GamingPage() {
                       </div>
                     </div>
                     
+                    {/* Matchmaking Mode Selection */}
+                    <div className="mb-4 flex gap-2">
+                      <button
+                        onClick={() => setMatchType('pool')}
+                        className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                          matchType === 'pool'
+                            ? 'bg-gray-800 text-white border-2 border-gray-600'
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        🏊 Pool Mode
+                      </button>
+                      <button
+                        onClick={() => setMatchType('p2p')}
+                        className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                          matchType === 'p2p'
+                            ? 'bg-blue-600 text-white border-2 border-blue-500'
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        ⚔️ Find Match (P2P)
+                      </button>
+                    </div>
+
+                    {/* Matchmaking Status */}
+                    {matchmakingStatus.status === 'waiting' && matchmakingStatus.gameType === 'pumpplay' && (
+                      <div className="mb-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-bold text-yellow-800">⏳ {matchmakingStatus.message}</div>
+                            <div className="text-xs text-yellow-600 mt-1">Lobby ID: {matchmakingStatus.lobbyId}</div>
+                          </div>
+                          <button
+                            onClick={stopMatchmaking}
+                            className="px-3 py-1 bg-red-500 text-white rounded text-sm font-semibold hover:bg-red-600"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {matchmakingStatus.status === 'matched' && matchmakingStatus.gameType === 'pumpplay' && (
+                      <div className="mb-4 bg-green-50 border-2 border-green-400 rounded-lg p-4">
+                        <div className="font-bold text-green-800">
+                          ✅ {matchmakingStatus.message}
+                        </div>
+                        <div className="text-xs text-green-600 mt-1">
+                          Match ID: {matchmakingStatus.matchId}
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex gap-3">
                       <button
                         onClick={placeBet}
-                        disabled={!address || !betCoin || !betToken || isBetting}
+                        disabled={!address || !betCoin || !betToken || isBetting || (matchmakingStatus.status === 'waiting' && matchmakingStatus.gameType === 'pumpplay')}
                         className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-lg hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed font-bold shadow-lg"
                       >
-                        {isBetting ? '🔄 Placing Bet...' : '🎲 Place Bet Now!'}
+                        {isBetting ? '🔄 Placing Bet...' : matchType === 'p2p' ? '⚔️ Find P2P Match' : '🎲 Place Bet Now!'}
                       </button>
                       <button
                         onClick={() => {
@@ -728,38 +1111,78 @@ export default function GamingPage() {
               </p>
             </div>
 
+            {loadingCoins && (
+              <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4 text-center">
+                <p className="text-blue-800">Loading coins...</p>
+              </div>
+            )}
+
+            {!loadingCoins && allCoins.length === 0 && (
+              <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
+                <p className="text-yellow-800">No coins available. Create some coins first!</p>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
               <div className={`border-2 rounded-lg p-5 ${stakeSide === 'left' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}>
                 <h3 className="font-bold text-lg mb-3">🥊 Left Fighter</h3>
                 <select
-                  value={leftCoin?.id || ''}
+                  value={leftCoin?.id?.toString() || leftCoin?.id || ''}
                   onChange={(e) => {
-                    const coin = allCoins.find(c => c.id === parseInt(e.target.value))
-                    setLeftCoin(coin ? {...coin, id: coin.id} : null)
+                    const selectedValue = e.target.value
+                    if (!selectedValue) {
+                      setLeftCoin(null)
+                      return
+                    }
+                    // Try multiple ways to match the coin
+                    const coin = allCoins.find(c => {
+                      const cId = c.id?.toString() || c.id
+                      const sVal = selectedValue?.toString()
+                      return cId === sVal || 
+                             c.id === parseInt(selectedValue) || 
+                             String(c.id) === String(selectedValue)
+                    })
+                    if (coin) {
+                      setLeftCoin(coin)
+                      console.log('✅ Left coin selected:', coin.symbol, coin.name, 'ID:', coin.id)
+                    } else {
+                      console.error('❌ Coin not found for value:', selectedValue)
+                      console.error('Available coins:', allCoins.map(c => ({ id: c.id, idType: typeof c.id, symbol: c.symbol })))
+                      alert(`Failed to find coin. Please refresh the page and try again.`)
+                    }
                   }}
                   className="w-full border-2 rounded-lg px-3 py-2 mb-3 font-medium"
-                  disabled={isBattling}
+                  disabled={isBattling || loadingCoins || allCoins.length === 0}
                 >
                   <option value="">Select fighter...</option>
-                  {allCoins.map((c) => (
-                    <option key={c.id} value={c.id}>{c.symbol} - {c.name} {c.hasBalance ? '✓' : ''}</option>
-                  ))}
+                  {allCoins.map((c, idx) => {
+                    const coinId = c.id?.toString() || c.id || idx
+                    return (
+                      <option key={coinId} value={coinId}>
+                        {c.symbol} - {c.name} {c.hasBalance ? '✓' : ''}
+                      </option>
+                    )
+                  })}
                 </select>
-                {leftCoin && (
-                  <div className="bg-white border-2 rounded-lg p-4">
-                    <div className="font-bold text-xl text-blue-600">{leftCoin.symbol}</div>
-                    <div className="text-sm text-gray-600 mb-2">{leftCoin.name}</div>
+                {leftCoin ? (
+                  <div className="bg-white border-2 rounded-lg p-4 mt-3">
+                    <div className="font-bold text-xl text-blue-600">{leftCoin.symbol || 'Unknown'}</div>
+                    <div className="text-sm text-gray-600 mb-2">{leftCoin.name || 'Unknown Coin'}</div>
                     <button
                       onClick={() => setStakeSide('left')}
                       disabled={isBattling}
-                      className={`w-full py-2 rounded-lg font-semibold ${
+                      className={`w-full py-2 rounded-lg font-semibold transition-all ${
                         stakeSide === 'left' 
-                          ? 'bg-blue-600 text-white' 
+                          ? 'bg-blue-600 text-white shadow-lg' 
                           : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                       }`}
                     >
                       {stakeSide === 'left' ? '✅ Betting on LEFT' : 'Bet on LEFT'}
                     </button>
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500 mt-2 italic text-center py-2">
+                    👆 Select a coin from dropdown above
                   </div>
                 )}
               </div>
@@ -767,34 +1190,62 @@ export default function GamingPage() {
               <div className={`border-2 rounded-lg p-5 ${stakeSide === 'right' ? 'border-purple-500 bg-purple-50' : 'border-gray-200'}`}>
                 <h3 className="font-bold text-lg mb-3">🥊 Right Fighter</h3>
                 <select
-                  value={rightCoin?.id || ''}
+                  value={rightCoin?.id?.toString() || rightCoin?.id || ''}
                   onChange={(e) => {
-                    const coin = allCoins.find(c => c.id === parseInt(e.target.value))
-                    setRightCoin(coin ? {...coin, id: coin.id} : null)
+                    const selectedValue = e.target.value
+                    if (!selectedValue) {
+                      setRightCoin(null)
+                      return
+                    }
+                    // Try multiple ways to match the coin
+                    const coin = allCoins.find(c => {
+                      const cId = c.id?.toString() || c.id
+                      const sVal = selectedValue?.toString()
+                      return cId === sVal || 
+                             c.id === parseInt(selectedValue) || 
+                             String(c.id) === String(selectedValue)
+                    })
+                    if (coin) {
+                      setRightCoin(coin)
+                      console.log('✅ Right coin selected:', coin.symbol, coin.name, 'ID:', coin.id)
+                    } else {
+                      console.error('❌ Coin not found for value:', selectedValue)
+                      console.error('Available coins:', allCoins.map(c => ({ id: c.id, idType: typeof c.id, symbol: c.symbol })))
+                      alert(`Failed to find coin. Please refresh the page and try again.`)
+                    }
                   }}
                   className="w-full border-2 rounded-lg px-3 py-2 mb-3 font-medium"
-                  disabled={isBattling}
+                  disabled={isBattling || loadingCoins || allCoins.length === 0}
                 >
                   <option value="">Select fighter...</option>
-                  {allCoins.map((c) => (
-                    <option key={c.id} value={c.id}>{c.symbol} - {c.name} {c.hasBalance ? '✓' : ''}</option>
-                  ))}
+                  {allCoins.map((c, idx) => {
+                    const coinId = c.id?.toString() || c.id || idx
+                    return (
+                      <option key={coinId} value={coinId}>
+                        {c.symbol} - {c.name} {c.hasBalance ? '✓' : ''}
+                      </option>
+                    )
+                  })}
                 </select>
-                {rightCoin && (
-                  <div className="bg-white border-2 rounded-lg p-4">
-                    <div className="font-bold text-xl text-purple-600">{rightCoin.symbol}</div>
-                    <div className="text-sm text-gray-600 mb-2">{rightCoin.name}</div>
+                {rightCoin ? (
+                  <div className="bg-white border-2 rounded-lg p-4 mt-3">
+                    <div className="font-bold text-xl text-purple-600">{rightCoin.symbol || 'Unknown'}</div>
+                    <div className="text-sm text-gray-600 mb-2">{rightCoin.name || 'Unknown Coin'}</div>
                     <button
                       onClick={() => setStakeSide('right')}
                       disabled={isBattling}
-                      className={`w-full py-2 rounded-lg font-semibold ${
+                      className={`w-full py-2 rounded-lg font-semibold transition-all ${
                         stakeSide === 'right' 
-                          ? 'bg-purple-600 text-white' 
+                          ? 'bg-purple-600 text-white shadow-lg' 
                           : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                       }`}
                     >
                       {stakeSide === 'right' ? '✅ Betting on RIGHT' : 'Bet on RIGHT'}
                     </button>
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500 mt-2 italic text-center py-2">
+                    👆 Select a coin from dropdown above
                   </div>
                 )}
               </div>
@@ -835,12 +1286,65 @@ export default function GamingPage() {
               </div>
             </div>
 
+            {/* Matchmaking Mode Selection */}
+            <div className="mb-4 flex gap-2">
+              <button
+                onClick={() => setMatchType('solo')}
+                className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                  matchType === 'solo'
+                    ? 'bg-gray-800 text-white border-2 border-gray-600'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                🎮 Auto Battle
+              </button>
+              <button
+                onClick={() => setMatchType('p2p')}
+                className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                  matchType === 'p2p'
+                    ? 'bg-red-600 text-white border-2 border-red-500'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                ⚔️ Find Match (P2P)
+              </button>
+            </div>
+
+            {/* Matchmaking Status */}
+            {matchmakingStatus.status === 'waiting' && matchmakingStatus.gameType === 'meme-royale' && (
+              <div className="mb-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-yellow-800">⏳ {matchmakingStatus.message}</div>
+                    <div className="text-xs text-yellow-600 mt-1">Lobby ID: {matchmakingStatus.lobbyId}</div>
+                  </div>
+                  <button
+                    onClick={stopMatchmaking}
+                    className="px-3 py-1 bg-red-500 text-white rounded text-sm font-semibold hover:bg-red-600"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {matchmakingStatus.status === 'matched' && matchmakingStatus.gameType === 'meme-royale' && (
+              <div className="mb-4 bg-green-50 border-2 border-green-400 rounded-lg p-4">
+                <div className="font-bold text-green-800">
+                  ✅ {matchmakingStatus.message}
+                </div>
+                <div className="text-xs text-green-600 mt-1">
+                  Match ID: {matchmakingStatus.matchId}
+                </div>
+              </div>
+            )}
+
             <button
               onClick={startBattle}
-              disabled={!address || !leftCoin || !rightCoin || !stakeSide || !stakeToken || isBattling}
+              disabled={!address || !leftCoin || !rightCoin || !stakeSide || !stakeToken || isBattling || (matchmakingStatus.status === 'waiting' && matchmakingStatus.gameType === 'meme-royale')}
               className="bg-gradient-to-r from-red-600 to-purple-600 text-white px-10 py-4 rounded-lg hover:from-red-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed font-bold text-lg shadow-lg mb-6"
             >
-              {isBattling ? '🔄 AI Judging Battle...' : '⚔️ START BATTLE!'}
+              {isBattling ? '🔄 AI Judging Battle...' : matchType === 'p2p' ? '⚔️ Find P2P Match' : '⚔️ START BATTLE!'}
             </button>
 
             {battleResult && battleResult.judged && (
@@ -965,11 +1469,224 @@ export default function GamingPage() {
                     <input type="number" value={minesBet} onChange={(e) => setMinesBet(e.target.value)} step="0.1" min="0.1" className="w-full border-2 rounded-lg px-3 py-2 font-medium" />
                   </div>
                 </div>
-                <button onClick={async () => { if (!address || !minesToken || parseFloat(minesBet) <= 0) return alert('Connect wallet and select token/amount'); try { const provider = new ethers.BrowserProvider((window as any).ethereum); const signer = await provider.getSigner(); const tokenContract = new ethers.Contract(minesToken, ['function transfer(address to, uint256 amount) returns (bool)'], signer); const amount = ethers.parseEther(minesBet); const tx = await tokenContract.transfer('0x2dC274ABC0df37647CEd9212e751524708a68996', amount); await tx.wait(); const res = await fetch(`${backend}/gaming/mines/start`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({userAddress: address, betAmount: parseFloat(minesBet), minesCount, tokenAddress: minesToken, txHash: tx.hash})}); const data = await res.json(); if (data.success) { setMinesGame(data); setGameStatus('active'); setRevealedTiles([]); setMinePositions([]); setCurrentMultiplier(1.0); } } catch (e: any) { alert(e.message || 'Failed') } }} disabled={!address || !minesToken} className="w-full bg-gradient-to-r from-orange-600 to-red-600 text-white px-8 py-4 rounded-lg hover:from-orange-700 hover:to-red-700 disabled:opacity-50 font-bold text-lg shadow-lg">💣 Start Game</button>
+
+                {/* Matchmaking Mode Selection */}
+                <div className="mb-4 flex gap-2">
+                  <button
+                    onClick={() => setMatchType('solo')}
+                    className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                      matchType === 'solo'
+                        ? 'bg-gray-800 text-white border-2 border-gray-600'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    🎮 Play Solo
+                  </button>
+                  <button
+                    onClick={() => setMatchType('p2p')}
+                    className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                      matchType === 'p2p'
+                        ? 'bg-orange-600 text-white border-2 border-orange-500'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                  >
+                    ⚔️ Find Match (P2P)
+                  </button>
+                </div>
+
+                {/* Matchmaking Status */}
+                {matchmakingStatus.status === 'waiting' && matchmakingStatus.gameType === 'mines' && (
+                  <div className="mb-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-yellow-800">⏳ {matchmakingStatus.message}</div>
+                        <div className="text-xs text-yellow-600 mt-1">Lobby ID: {matchmakingStatus.lobbyId}</div>
+                      </div>
+                      <button
+                        onClick={stopMatchmaking}
+                        className="px-3 py-1 bg-red-500 text-white rounded text-sm font-semibold hover:bg-red-600"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {matchmakingStatus.status === 'matched' && matchmakingStatus.gameType === 'mines' && (
+                  <div className="mb-4 bg-green-50 border-2 border-green-400 rounded-lg p-4">
+                    <div className="font-bold text-green-800">
+                      ✅ {matchmakingStatus.message}
+                    </div>
+                    <div className="text-xs text-green-600 mt-1">
+                      Match ID: {matchmakingStatus.matchId}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={async () => {
+                    if (!address || !minesToken || parseFloat(minesBet) <= 0) return alert('Connect wallet and select token/amount')
+                    
+                    try {
+                      const provider = new ethers.BrowserProvider((window as any).ethereum)
+                      const signer = await provider.getSigner()
+                      const tokenContract = new ethers.Contract(minesToken, ['function transfer(address to, uint256 amount) returns (bool)'], signer)
+                      const amount = ethers.parseEther(minesBet)
+                      const tx = await tokenContract.transfer('0x2dC274ABC0df37647CEd9212e751524708a68996', amount)
+                      await tx.wait()
+
+                      if (matchType === 'p2p') {
+                        // P2P Matchmaking
+                        const matchResult = await startMatchmaking('mines', { minesCount }, parseFloat(minesBet), minesToken, tx.hash)
+                        
+                        if (matchResult && typeof matchResult === 'object' && 'matched' in matchResult) {
+                          if (matchResult.matched) {
+                            // Start game with matchId
+                            const res = await fetch(`${backend}/gaming/mines/matchmake`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                userAddress: address,
+                                betAmount: parseFloat(minesBet),
+                                minesCount,
+                                tokenAddress: minesToken,
+                                txHash: tx.hash,
+                                matchType: 'p2p'
+                              })
+                            })
+                            const data = await res.json()
+                            if (data.success && data.matched) {
+                              setMinesGame(data)
+                              setGameStatus('active')
+                              setRevealedTiles([])
+                              setMinePositions([])
+                              setCurrentMultiplier(1.0)
+                            }
+                          }
+                          // If not matched yet, will wait and poll
+                        }
+                      } else {
+                        // Solo mode
+                        const res = await fetch(`${backend}/gaming/mines/start`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            userAddress: address,
+                            betAmount: parseFloat(minesBet),
+                            minesCount,
+                            tokenAddress: minesToken,
+                            txHash: tx.hash
+                          })
+                        })
+                        const data = await res.json()
+                        if (data.success) {
+                          setMinesGame(data)
+                          setGameStatus('active')
+                          setRevealedTiles([])
+                          setMinePositions([])
+                          setCurrentMultiplier(1.0)
+                        }
+                      }
+                    } catch (e: any) {
+                      alert(e.message || 'Failed')
+                    }
+                  }}
+                  disabled={!address || !minesToken || matchmakingStatus.status === 'waiting'}
+                  className="w-full bg-gradient-to-r from-orange-600 to-red-600 text-white px-8 py-4 rounded-lg hover:from-orange-700 hover:to-red-700 disabled:opacity-50 font-bold text-lg shadow-lg"
+                >
+                  {matchType === 'p2p' ? '⚔️ Find P2P Match' : '💣 Start Solo Game'}
+                </button>
               </div>
             )}
 
-            {gameStatus === 'active' && (<div><div className="flex justify-between items-center mb-6 bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-300 rounded-lg p-4"><div><div className="text-sm text-gray-600">Multiplier</div><div className="text-3xl font-bold text-orange-600">{currentMultiplier.toFixed(2)}x</div></div><div><div className="text-sm text-gray-600">Potential Win</div><div className="text-2xl font-bold text-green-600">{(parseFloat(minesBet) * currentMultiplier).toFixed(4)}</div></div><button onClick={async () => { try { const res = await fetch(`${backend}/gaming/mines/cashout`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({gameId: minesGame.gameId})}); const data = await res.json(); if (data.success) { setGameStatus('cashed'); alert(`💰 Cashed out ${data.cashoutAmount.toFixed(4)} tokens!`); setTimeout(() => loadCoinsData(), 2000); } } catch (e: any) { alert(e.message) } }} disabled={revealedTiles.length === 0} className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 disabled:opacity-50 font-bold">💰 Cash Out</button></div><div className="grid grid-cols-5 gap-2 mb-4">{Array.from({ length: 25 }, (_, i) => { const isRevealed = revealedTiles.includes(i); const isMine = minePositions.includes(i); return (<button key={i} onClick={async () => { if (isRevealed) return; try { const res = await fetch(`${backend}/gaming/mines/reveal`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({gameId: minesGame.gameId, tileIndex: i})}); const data = await res.json(); if (data.hitMine) { setRevealedTiles(data.revealedTiles); setMinePositions(data.minePositions); setGameStatus('lost'); alert('💥 BOOM!'); } else { setRevealedTiles(data.revealedTiles); setCurrentMultiplier(data.currentMultiplier); if (data.status === 'won') { setMinePositions(data.minePositions); setGameStatus('won'); alert('🎉 WON!'); } } } catch (e: any) { alert(e.message) } }} disabled={isRevealed} className={`aspect-square text-2xl font-bold rounded-lg transition-all ${isRevealed ? (isMine ? 'bg-red-500 text-white' : 'bg-green-500 text-white') : 'bg-gray-200 hover:bg-gray-300 active:scale-95'}`}>{isRevealed ? (isMine ? '💣' : '💎') : '?'}</button>); })}</div><div className="text-center text-sm text-gray-600">{revealedTiles.length} / {25 - minesCount} revealed</div></div>)}
+              {gameStatus === 'active' && (
+                <div>
+                  <div className="flex justify-between items-center mb-6 bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-300 rounded-lg p-4">
+                    <div>
+                      <div className="text-sm text-gray-600">Multiplier</div>
+                      <div className="text-3xl font-bold text-orange-600">{(currentMultiplier ?? 1.0).toFixed(2)}x</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-600">Potential Win</div>
+                      <div className="text-2xl font-bold text-green-600">{(parseFloat(minesBet || '0') * (currentMultiplier ?? 1.0)).toFixed(4)}</div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`${backend}/gaming/mines/cashout`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ gameId: minesGame?.gameId })
+                          });
+                          const data = await res.json();
+                          if (!data?.success) {
+                            alert(data?.error || 'Cashout failed');
+                            return;
+                          }
+                          const amt = typeof data.cashoutAmount === 'number' ? data.cashoutAmount : parseFloat(data.cashoutAmount || '0');
+                          setGameStatus('cashed');
+                          alert(`💰 Cashed out ${amt.toFixed(4)} tokens!`);
+                          setTimeout(() => loadCoinsData(), 2000);
+                        } catch (e: any) {
+                          alert(e?.message || 'Cashout error');
+                        }
+                      }}
+                      disabled={(revealedTiles?.length ?? 0) === 0 || !minesGame?.gameId}
+                      className="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 disabled:opacity-50 font-bold"
+                    >
+                      💰 Cash Out
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-5 gap-2 mb-4">
+                    {Array.from({ length: 25 }, (_, i) => {
+                      const isRevealed = (revealedTiles || []).includes(i);
+                      const isMine = (minePositions || []).includes(i);
+                      return (
+                        <button
+                          key={i}
+                          onClick={async () => {
+                            if (isRevealed) return;
+                            try {
+                              const res = await fetch(`${backend}/gaming/mines/reveal`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ gameId: minesGame?.gameId, tileIndex: i })
+                              });
+                              const data = await res.json();
+                              if (!data?.success) {
+                                alert(data?.error || 'Reveal failed');
+                                return;
+                              }
+                              if (data.hitMine) {
+                                setRevealedTiles(data.revealedTiles || []);
+                                setMinePositions(data.minePositions || []);
+                                setGameStatus('lost');
+                                alert('💥 BOOM!');
+                              } else {
+                                setRevealedTiles(data.revealedTiles || []);
+                                setCurrentMultiplier(data.currentMultiplier ?? currentMultiplier ?? 1.0);
+                                if (data.status === 'won') {
+                                  setMinePositions(data.minePositions || []);
+                                  setGameStatus('won');
+                                  alert('🎉 WON!');
+                                }
+                              }
+                            } catch (e: any) {
+                              alert(e?.message || 'Reveal error');
+                            }
+                          }}
+                          disabled={isRevealed}
+                          className={`aspect-square text-2xl font-bold rounded-lg transition-all ${isRevealed ? (isMine ? 'bg-red-500 text-white' : 'bg-green-500 text-white') : 'bg-gray-200 hover:bg-gray-300 active:scale-95'}`}
+                        >
+                          {isRevealed ? (isMine ? '💣' : '💎') : '?'}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="text-center text-sm text-gray-600">{(revealedTiles?.length ?? 0)} / {25 - minesCount} revealed</div>
+                </div>
+              )}
 
             {(gameStatus === 'lost' || gameStatus === 'won' || gameStatus === 'cashed') && (<div className="text-center"><div className={`text-4xl font-bold mb-4 ${gameStatus === 'won' || gameStatus === 'cashed' ? 'text-green-600' : 'text-red-600'}`}>{gameStatus === 'won' && '🎉 PERFECT!'}{gameStatus === 'lost' && '💥 BOOM!'}{gameStatus === 'cashed' && '💰 Cashed Out!'}</div><div className="grid grid-cols-5 gap-2 mb-6">{Array.from({ length: 25 }, (_, i) => (<div key={i} className={`aspect-square text-2xl font-bold rounded-lg flex items-center justify-center ${minePositions.includes(i) ? 'bg-red-500 text-white' : 'bg-green-500 text-white opacity-40'}`}>{minePositions.includes(i) ? '💣' : revealedTiles.includes(i) ? '💎' : ''}</div>))}</div><button onClick={() => { setGameStatus('idle'); setMinesGame(null); setRevealedTiles([]); setMinePositions([]); setCurrentMultiplier(1.0); }} className="bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 font-bold">Play Again</button></div>)}
 
@@ -1037,12 +1754,65 @@ export default function GamingPage() {
               </div>
             </div>
 
+            {/* Matchmaking Mode Selection */}
+            <div className="mb-4 flex gap-2">
+              <button
+                onClick={() => setMatchType('solo')}
+                className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                  matchType === 'solo'
+                    ? 'bg-gray-800 text-white border-2 border-gray-600'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                🎮 Play Solo
+              </button>
+              <button
+                onClick={() => setMatchType('p2p')}
+                className={`flex-1 px-4 py-2 rounded-lg font-semibold transition-all ${
+                  matchType === 'p2p'
+                    ? 'bg-blue-600 text-white border-2 border-blue-500'
+                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                }`}
+              >
+                ⚔️ Find Match (P2P)
+              </button>
+            </div>
+
+            {/* Matchmaking Status */}
+            {matchmakingStatus.status === 'waiting' && matchmakingStatus.gameType === 'coinflip' && (
+              <div className="mb-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-yellow-800">⏳ {matchmakingStatus.message}</div>
+                    <div className="text-xs text-yellow-600 mt-1">Lobby ID: {matchmakingStatus.lobbyId}</div>
+                  </div>
+                  <button
+                    onClick={stopMatchmaking}
+                    className="px-3 py-1 bg-red-500 text-white rounded text-sm font-semibold hover:bg-red-600"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {matchmakingStatus.status === 'matched' && matchmakingStatus.gameType === 'coinflip' && (
+              <div className="mb-4 bg-green-50 border-2 border-green-400 rounded-lg p-4">
+                <div className="font-bold text-green-800">
+                  ✅ {matchmakingStatus.message}
+                </div>
+                <div className="text-xs text-green-600 mt-1">
+                  Match ID: {matchmakingStatus.matchId}
+                </div>
+              </div>
+            )}
+
             <button
               onClick={playCoinflip}
-              disabled={!address || !flipToken || isFlipping}
+              disabled={!address || !flipToken || isFlipping || (matchmakingStatus.status === 'waiting' && matchmakingStatus.gameType === 'coinflip')}
               className="bg-gradient-to-r from-green-600 to-blue-600 text-white px-8 py-3 rounded-lg hover:from-green-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed mb-6 font-bold text-lg shadow-lg"
             >
-              {isFlipping ? '🔄 Flipping...' : '🪙 Flip Now!'}
+              {isFlipping ? '🔄 Flipping...' : matchType === 'p2p' ? '⚔️ Find P2P Match' : '🪙 Flip Now!'}
             </button>
 
             {coinflipResult && (
@@ -1119,6 +1889,272 @@ export default function GamingPage() {
                 <li>• No house edge - pure 50/50 odds</li>
                 <li>• All transactions on-chain and transparent</li>
               </ul>
+            </div>
+          </div>
+        )}
+
+        {/* Roulette Tab - Visually Stunning */}
+        {activeTab === 'roulette' && (
+          <div className="bg-gradient-to-br from-yellow-900/40 via-red-900/40 to-pink-900/40 backdrop-blur-xl border-2 border-yellow-500 rounded-3xl p-8 shadow-[0_0_40px_rgba(234,179,8,0.4)]">
+            <h2 className="text-4xl font-black mb-6 bg-gradient-to-r from-yellow-400 via-red-400 to-pink-400 text-transparent bg-clip-text drop-shadow-[0_0_15px_rgba(234,179,8,0.8)]">
+              🎡 ROULETTE - SPIN TO WIN
+            </h2>
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+              <p className="text-yellow-800 font-medium">
+                ⚡ <strong>How it works:</strong> Place bets on numbers, colors, or ranges. 
+                Spin the wheel and win based on where the ball lands! Multiple betting options with different odds.
+                Real tokens, real payouts verified on 0G DA.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Roulette Wheel */}
+              <div className="lg:col-span-2">
+                <div className="bg-black/90 rounded-3xl p-8 border-4 border-yellow-500 shadow-[0_0_50px_rgba(234,179,8,0.6)]">
+                  <div className="relative mx-auto" style={{ width: '500px', height: '500px' }}>
+                    {/* Roulette Wheel Container */}
+                    <div 
+                      className="relative mx-auto rounded-full border-8 border-yellow-400 shadow-[0_0_30px_rgba(234,179,8,0.8),inset_0_0_50px_rgba(0,0,0,0.5)]"
+                      style={{
+                        width: '450px',
+                        height: '450px',
+                        background: 'radial-gradient(circle, #1a1a1a 0%, #000 100%)',
+                        transform: `rotate(${wheelRotation}deg)`,
+                        transition: isSpinning ? 'none' : 'transform 0.3s ease-out'
+                      }}
+                    >
+                      {/* Wheel Numbers - European Roulette (0-36) */}
+                      <div className="absolute inset-0">
+                        {[...Array(37)].map((_, i) => {
+                          const angle = (i * 360 / 37) - 90
+                          const isRed = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].includes(i)
+                          const isBlack = ![0].includes(i) && !isRed
+                          const radius = 200
+                          const x = 225 + radius * Math.cos((angle * Math.PI) / 180)
+                          const y = 225 + radius * Math.sin((angle * Math.PI) / 180)
+                          
+                          return (
+                            <div
+                              key={i}
+                              className={`absolute w-12 h-12 rounded-full flex items-center justify-center font-black text-white border-2 border-white shadow-lg ${
+                                i === 0 ? 'bg-green-500' : isRed ? 'bg-red-600' : 'bg-black'
+                              }`}
+                              style={{
+                                left: `${x - 24}px`,
+                                top: `${y - 24}px`,
+                                transform: `rotate(${-wheelRotation}deg)`
+                              }}
+                            >
+                              <span className="text-sm">{i}</span>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      {/* Center Pointer */}
+                      <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-4 z-20">
+                        <div className="w-0 h-0 border-l-[20px] border-l-transparent border-r-[20px] border-r-transparent border-t-[40px] border-t-yellow-400 drop-shadow-[0_0_10px_rgba(234,179,8,1)]"></div>
+                      </div>
+
+                      {/* Ball Indicator */}
+                      {spinningNumber !== null && (
+                        <div 
+                          className="absolute w-8 h-8 rounded-full bg-white border-4 border-yellow-400 shadow-[0_0_20px_rgba(255,255,255,0.8)] z-30 animate-pulse"
+                          style={{
+                            left: `${225 + 180 * Math.cos(((spinningNumber * 360 / 37 - 90) * Math.PI) / 180) - 16}px`,
+                            top: `${225 + 180 * Math.sin(((spinningNumber * 360 / 37 - 90) * Math.PI) / 180) - 16}px`
+                          }}
+                        ></div>
+                      )}
+                    </div>
+
+                    {/* Spin Button */}
+                    <div className="text-center mt-8">
+                      <button
+                        onClick={handleSpinRoulette}
+                        disabled={!address || rouletteTotalBet === 0 || isSpinning || Object.keys(rouletteBets).length === 0}
+                        className={`px-12 py-4 rounded-2xl font-black text-2xl transition-all duration-300 transform ${
+                          isSpinning
+                            ? 'bg-gray-600 cursor-not-allowed'
+                            : rouletteTotalBet === 0 || Object.keys(rouletteBets).length === 0
+                            ? 'bg-gray-600 cursor-not-allowed'
+                            : 'bg-gradient-to-r from-yellow-500 via-red-600 to-pink-600 text-white shadow-[0_0_40px_rgba(234,179,8,0.8)] hover:scale-110 hover:shadow-[0_0_60px_rgba(234,179,8,1)] border-4 border-yellow-400'
+                        }`}
+                      >
+                        {isSpinning ? '🎡 SPINNING...' : '🎡 SPIN THE WHEEL'}
+                      </button>
+                    </div>
+
+                    {/* Result Display */}
+                    {rouletteResult && (
+                      <div className="mt-6 text-center">
+                        <div className={`text-6xl font-black mb-2 ${
+                          rouletteResult.number === 0 ? 'text-green-400' :
+                          [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].includes(rouletteResult.number)
+                            ? 'text-red-400' : 'text-black'
+                        }`}>
+                          {rouletteResult.number}
+                        </div>
+                        <div className="text-2xl font-bold text-white">
+                          {rouletteResult.color.toUpperCase()} • {rouletteResult.parity}
+                        </div>
+                        {rouletteResult.winnings > 0 && (
+                          <div className="mt-4 text-3xl font-black text-green-400 drop-shadow-[0_0_10px_rgba(34,197,94,1)]">
+                            🎉 YOU WON {rouletteResult.winnings.toFixed(4)} TOKENS!
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Betting Panel */}
+              <div className="space-y-4">
+                {/* Token Selection */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 border-2 border-yellow-400">
+                  <label className="block text-white font-bold mb-2">💰 Token to Bet</label>
+                  <select
+                    value={rouletteToken}
+                    onChange={(e) => setRouletteToken(e.target.value)}
+                    className="w-full bg-gray-900 text-white border-2 border-yellow-400 rounded-lg px-4 py-2 font-semibold"
+                    disabled={isSpinning}
+                  >
+                    <option value="">Select token...</option>
+                    {userCoins.map((c) => (
+                      <option key={c.tokenAddress} value={c.tokenAddress}>
+                        {c.symbol} ({parseFloat(c.balance).toFixed(4)}) - {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Outside Bets */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 border-2 border-yellow-400">
+                  <h3 className="text-white font-bold mb-4 text-xl">🎯 Outside Bets</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => handleRouletteBet('red', 0.5)}
+                      className="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg border-2 border-red-400 shadow-lg transition-all hover:scale-105"
+                      disabled={isSpinning || !rouletteToken}
+                    >
+                      RED (1:1)
+                    </button>
+                    <button
+                      onClick={() => handleRouletteBet('black', 0.5)}
+                      className="bg-black hover:bg-gray-900 text-white font-bold py-3 px-4 rounded-lg border-2 border-gray-400 shadow-lg transition-all hover:scale-105"
+                      disabled={isSpinning || !rouletteToken}
+                    >
+                      BLACK (1:1)
+                    </button>
+                    <button
+                      onClick={() => handleRouletteBet('even', 0.5)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg border-2 border-blue-400 shadow-lg transition-all hover:scale-105"
+                      disabled={isSpinning || !rouletteToken}
+                    >
+                      EVEN (1:1)
+                    </button>
+                    <button
+                      onClick={() => handleRouletteBet('odd', 0.5)}
+                      className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg border-2 border-purple-400 shadow-lg transition-all hover:scale-105"
+                      disabled={isSpinning || !rouletteToken}
+                    >
+                      ODD (1:1)
+                    </button>
+                    <button
+                      onClick={() => handleRouletteBet('1-18', 0.5)}
+                      className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg border-2 border-green-400 shadow-lg transition-all hover:scale-105"
+                      disabled={isSpinning || !rouletteToken}
+                    >
+                      1-18 (1:1)
+                    </button>
+                    <button
+                      onClick={() => handleRouletteBet('19-36', 0.5)}
+                      className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg border-2 border-orange-400 shadow-lg transition-all hover:scale-105"
+                      disabled={isSpinning || !rouletteToken}
+                    >
+                      19-36 (1:1)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Number Selection */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 border-2 border-yellow-400">
+                  <h3 className="text-white font-bold mb-4 text-xl">🎲 Single Numbers (35:1)</h3>
+                  <div className="grid grid-cols-6 gap-2 max-h-64 overflow-y-auto">
+                    {[...Array(37)].map((_, num) => {
+                      const isRed = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].includes(num)
+                      const isBlack = num !== 0 && !isRed
+                      const betAmount = rouletteBets[`number-${num}`] || 0
+                      
+                      return (
+                        <button
+                          key={num}
+                          onClick={() => handleRouletteBet(`number-${num}`, 0.1)}
+                          className={`font-bold py-2 px-3 rounded-lg border-2 transition-all hover:scale-110 ${
+                            num === 0 
+                              ? 'bg-green-600 text-white border-green-400' 
+                              : isRed 
+                              ? 'bg-red-600 text-white border-red-400' 
+                              : 'bg-black text-white border-gray-400'
+                          } ${betAmount > 0 ? 'ring-4 ring-yellow-400' : ''}`}
+                          disabled={isSpinning || !rouletteToken}
+                        >
+                          <div className="text-xs">{num}</div>
+                          {betAmount > 0 && (
+                            <div className="text-[10px] text-yellow-300">{betAmount.toFixed(2)}</div>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Total Bet & Clear */}
+                <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 border-2 border-yellow-400">
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="text-white font-bold text-xl">Total Bet:</span>
+                    <span className="text-yellow-400 font-black text-2xl">{rouletteTotalBet.toFixed(4)}</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setRouletteBets({})
+                      setRouletteTotalBet(0)
+                    }}
+                    className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg border-2 border-red-400 transition-all hover:scale-105"
+                    disabled={isSpinning}
+                  >
+                    🗑️ CLEAR ALL BETS
+                  </button>
+                </div>
+
+                {/* Recent Results */}
+                {rouletteHistory.length > 0 && (
+                  <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-6 border-2 border-yellow-400">
+                    <h3 className="text-white font-bold mb-4 text-xl">📜 Recent Results</h3>
+                    <div className="flex gap-2 flex-wrap">
+                      {rouletteHistory.slice(-10).reverse().map((num, idx) => {
+                        const isRed = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].includes(num)
+                        const isBlack = num !== 0 && !isRed
+                        return (
+                          <div
+                            key={idx}
+                            className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-white border-2 ${
+                              num === 0 
+                                ? 'bg-green-600 border-green-400' 
+                                : isRed 
+                                ? 'bg-red-600 border-red-400' 
+                                : 'bg-black border-gray-400'
+                            }`}
+                          >
+                            {num}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

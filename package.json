@@ -27,6 +27,8 @@
     "deploy:dex:core": "hardhat run scripts/deployCoreDEX.js --network 0g-galileo-testnet",
     "enable:existing": "hardhat run scripts/enableExistingTokens.js --network 0g-galileo-testnet",
     "find:tokens": "node scripts/findTokensFromStorage.js",
+    "deploy:mainnet": "hardhat run scripts/deployAllMainnet.js --network 0g-mainnet",
+    "check:balance": "node scripts/checkBalance.js",
     "compile": "hardhat compile",
     "test:storage": "node test-0g-storage.js",
     "start:0g": "start-0g-integration.bat",

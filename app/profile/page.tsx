@@ -49,30 +49,13 @@ export default function ProfilePage() {
     setMounted(true)
   }, [])
 
-  // Initialize profile manager and load profile
+  // Load profile when wallet is connected
   useEffect(() => {
     if (mounted && isConnected && userAddress) {
-      initializeProfileManager()
+      console.log('🔄 Profile page: Wallet connected, loading profile...')
+      loadProfile()
     }
   }, [mounted, isConnected, userAddress])
-
-  const initializeProfileManager = async () => {
-    if (!userAddress) return
-
-    try {
-      const eth = (typeof window !== 'undefined') ? (window as any).ethereum : undefined
-      if (!eth) return
-
-      const provider = new BrowserProvider(eth)
-      const signer = await provider.getSigner()
-      
-      await userProfileManager.initialize(signer)
-      await loadProfile()
-    } catch (error) {
-      console.error('Failed to initialize profile manager:', error)
-      setError('Failed to connect to profile system')
-    }
-  }
 
   const loadProfile = async () => {
     if (!userAddress) return
@@ -81,130 +64,69 @@ export default function ProfilePage() {
     setError(null)
 
     try {
-      let userProfile = await userProfileManager.getProfile(userAddress)
+      const backendBase = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_BACKEND_URL) || 'http://localhost:4000'
+
+      // Load profile directly from backend API which now returns REAL data
+      console.log(`📥 Loading profile from: ${backendBase}/profile/${userAddress}`)
+      const profileRes = await fetch(`${backendBase}/profile/${userAddress}`, { cache: 'no-store' })
       
-      if (!userProfile) {
-        // Create new profile
-        const result = await userProfileManager.createProfile(userAddress, {
-          username: `User_${userAddress.slice(0, 6)}`,
-          bio: 'Welcome to OG Pump! 🚀'
-        })
-        
-        if (result.success && result.profile) {
-          userProfile = result.profile
-        } else {
-          throw new Error(result.error || 'Failed to create profile')
-        }
+      if (!profileRes.ok) {
+        const errorText = await profileRes.text()
+        console.error(`❌ Profile API error (${profileRes.status}):`, errorText)
+        throw new Error(`Failed to load profile: ${profileRes.statusText}`)
       }
 
-      // Ensure profile has all required fields
-      const completeProfile = {
-        walletAddress: userProfile.walletAddress,
-        username: userProfile.username || `User_${userAddress.slice(0, 6)}`,
-        bio: userProfile.bio || 'Welcome to OG Pump! 🚀',
-        avatarUrl: userProfile.avatarUrl || null,
-        createdAt: userProfile.createdAt || new Date().toISOString(),
-        updatedAt: userProfile.updatedAt || new Date().toISOString(),
-        tokensCreated: userProfile.tokensCreated || [],
+      const data = await profileRes.json()
+      console.log('📦 Profile API response:', data)
+      
+      if (!data.success || !data.profile) {
+        console.error('❌ Invalid profile response:', data)
+        throw new Error('Invalid profile response from server')
+      }
+
+      const completeProfile = data.profile
+
+      // Ensure all fields are present
+      const profile = {
+        walletAddress: completeProfile.walletAddress || userAddress.toLowerCase(),
+        username: completeProfile.username || `User_${userAddress.slice(0, 6)}`,
+        bio: completeProfile.bio || 'Welcome to OG Pump! 🚀',
+        avatarUrl: completeProfile.avatarUrl || null,
+        createdAt: completeProfile.createdAt || new Date().toISOString(),
+        updatedAt: completeProfile.updatedAt || new Date().toISOString(),
+        tokensCreated: completeProfile.tokensCreated || [],
         tradingStats: {
-          totalTrades: 0,
-          totalVolume: 0,
-          tokensHeld: 0,
-          favoriteTokens: [],
-          lastTradeAt: null,
-          ...userProfile.tradingStats
+          totalTrades: completeProfile.tradingStats?.totalTrades || 0,
+          totalVolume: completeProfile.tradingStats?.totalVolume || 0,
+          tokensHeld: completeProfile.tradingStats?.tokensHeld || 0,
+          favoriteTokens: completeProfile.tradingStats?.favoriteTokens || [],
+          lastTradeAt: completeProfile.tradingStats?.lastTradeAt || null
         },
         preferences: {
           theme: 'light',
           notifications: true,
           publicProfile: true,
           showTradingStats: true,
-          ...userProfile.preferences
+          ...completeProfile.preferences
         }
       }
       
-      setProfile(completeProfile)
-      setEditForm({
-        username: completeProfile.username,
-        bio: completeProfile.bio,
-        publicProfile: completeProfile.preferences.publicProfile,
-        showTradingStats: completeProfile.preferences.showTradingStats,
-        notifications: completeProfile.preferences.notifications
+      console.log('✅ Profile loaded with REAL data:', {
+        tokensCreated: profile.tokensCreated.length,
+        totalTrades: profile.tradingStats.totalTrades,
+        totalVolume: profile.tradingStats.totalVolume,
+        tokensHeld: profile.tradingStats.tokensHeld,
+        memberSince: profile.createdAt
       })
-
-      // Enrich from backend: tokens created + trading stats unique to this wallet
-      try {
-        const backendBase = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_BACKEND_URL) || 'http://localhost:4000'
-
-        // Fetch coins created by this wallet
-        const coinsRes = await fetch(`${backendBase}/coins?limit=200&offset=0&sortBy=createdAt&order=DESC`, { cache: 'no-store' })
-        if (coinsRes.ok) {
-          const coinsData = await coinsRes.json()
-          const myCoins = (coinsData.coins || []).filter((c: any) => String(c.creator).toLowerCase() === String(userAddress).toLowerCase())
-          const tokensCreated = myCoins.map((c: any) => ({
-            tokenAddress: c.tokenAddress || '',
-            tokenName: c.name,
-            tokenSymbol: c.symbol,
-            curveAddress: c.curveAddress || undefined,
-            createdAt: new Date(c.createdAt).toISOString(),
-            txHash: c.txHash || `local-${Date.now()}`,
-            imageUrl: c.imageUrl || (c.imageHash ? `${backendBase}/download/${c.imageHash}` : undefined),
-            description: c.description || undefined
-          }))
-
-          // Only update if different
-          if (JSON.stringify(tokensCreated) !== JSON.stringify(completeProfile.tokensCreated)) {
-            const updated = { ...completeProfile, tokensCreated }
-            setProfile(updated)
-            await userProfileManager.updateProfile(userAddress, { tokensCreated })
-          }
-        }
-
-        // Fetch trading history to compute stats
-        const histRes = await fetch(`${backendBase}/trading/history/${userAddress}?limit=500&offset=0`, { cache: 'no-store' })
-        if (histRes.ok) {
-          const hist = await histRes.json()
-          const trades = hist.history || []
-          const totalTrades = trades.length
-          const totalVolume = trades.reduce((acc: number, t: any) => acc + (Number(t.amountOg || 0)), 0)
-          
-          console.log(`Profile enrichment: Found ${totalTrades} trades, total volume: ${totalVolume} OG for wallet ${userAddress}`)
-          
-          const updatedStats = {
-            ...completeProfile.tradingStats,
-            totalTrades,
-            totalVolume,
-            // tokensHeld would require per-token balance; keep existing for now
-            lastTradeAt: totalTrades > 0 ? new Date(trades[0].timestamp * 1000).toISOString() : completeProfile.tradingStats.lastTradeAt
-          }
-          const updated = { ...completeProfile, tradingStats: updatedStats }
-          setProfile(updated)
-          await userProfileManager.updateProfile(userAddress, { tradingStats: updatedStats })
-        } else {
-          console.warn(`Failed to fetch trading history for ${userAddress}:`, histRes.status, histRes.statusText)
-        }
-
-        // Fetch tokens held count
-        const tokensHeldRes = await fetch(`${backendBase}/profile/${userAddress}/tokens-held`, { cache: 'no-store' })
-        if (tokensHeldRes.ok) {
-          const tokensData = await tokensHeldRes.json()
-          const tokensHeld = tokensData.tokensHeld || 0
-          
-          console.log(`Profile enrichment: Found ${tokensHeld} tokens held by wallet ${userAddress}`)
-          
-          const updatedStats = {
-            ...completeProfile.tradingStats,
-            tokensHeld
-          }
-          const updated = { ...completeProfile, tradingStats: updatedStats }
-          setProfile(updated)
-          await userProfileManager.updateProfile(userAddress, { tradingStats: updatedStats })
-        } else {
-          console.warn(`Failed to fetch tokens held count for ${userAddress}:`, tokensHeldRes.status, tokensHeldRes.statusText)
-        }
-      } catch (enrichErr) {
-        console.warn('Profile enrichment skipped:', (enrichErr as any)?.message || enrichErr)
-      }
+      
+      setProfile(profile)
+      setEditForm({
+        username: profile.username,
+        bio: profile.bio,
+        publicProfile: profile.preferences.publicProfile,
+        showTradingStats: profile.preferences.showTradingStats,
+        notifications: profile.preferences.notifications
+      })
     } catch (error: any) {
       console.error('Error loading profile:', error)
       setError(error.message || 'Failed to load profile')
@@ -224,49 +146,71 @@ export default function ProfilePage() {
     setError(null)
 
     try {
-      // Handle avatar upload if new file selected (with graceful failure handling)
+      const backendBase = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_BACKEND_URL) || 'http://localhost:4000'
+
+      // Handle avatar upload if new file selected
       let avatarUrl = profile.avatarUrl
       let avatarUploadError = null
       
       if (avatarFile) {
         setIsUploadingAvatar(true)
         try {
-          const uploadResult = await userProfileManager.uploadAvatar(avatarFile, userAddress)
-          if (uploadResult.success && uploadResult.url) {
-            avatarUrl = uploadResult.url
-            console.log('✅ Avatar uploaded successfully')
+          const formData = new FormData()
+          formData.append('avatar', avatarFile)
+          
+          const uploadRes = await fetch(`${backendBase}/profile/${userAddress}/avatar`, {
+            method: 'POST',
+            body: formData
+          })
+          
+          if (uploadRes.ok) {
+            const uploadData = await uploadRes.json()
+            if (uploadData.success && uploadData.avatarUrl) {
+              avatarUrl = uploadData.avatarUrl
+              console.log('✅ Avatar uploaded successfully')
+            } else {
+              avatarUploadError = uploadData.error || 'Failed to upload avatar'
+            }
           } else {
-            avatarUploadError = uploadResult.error || 'Failed to upload avatar'
-            console.warn('⚠️ Avatar upload failed:', avatarUploadError)
+            avatarUploadError = `Upload failed: ${uploadRes.statusText}`
           }
-        } catch (avatarError) {
+        } catch (avatarError: any) {
           avatarUploadError = avatarError.message || 'Avatar upload failed'
           console.warn('⚠️ Avatar upload error:', avatarError)
         }
         setIsUploadingAvatar(false)
       }
 
-      // Update profile (always attempt this, even if avatar upload failed)
-      const result = await userProfileManager.updateProfile(userAddress, {
-        username: editForm.username,
-        bio: editForm.bio,
-        avatarUrl, // Use existing avatar if upload failed
-        preferences: {
-          theme: 'light',
-          notifications: true,
-          publicProfile: true,
-          showTradingStats: true,
-          ...profile.preferences,
-          publicProfile: editForm.publicProfile,
-          showTradingStats: editForm.showTradingStats,
-          notifications: editForm.notifications
-        }
+      // Update profile via backend API
+      const updateRes = await fetch(`${backendBase}/profile/${userAddress}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: editForm.username,
+          bio: editForm.bio,
+          avatarUrl, // Use existing avatar if upload failed
+          preferences: {
+            ...profile.preferences,
+            publicProfile: editForm.publicProfile,
+            showTradingStats: editForm.showTradingStats,
+            notifications: editForm.notifications
+          }
+        })
       })
 
-      if (result.success && result.profile) {
-        setProfile(result.profile)
+      if (!updateRes.ok) {
+        throw new Error(`Failed to update profile: ${updateRes.statusText}`)
+      }
+
+      const updateData = await updateRes.json()
+      
+      if (updateData.success && updateData.profile) {
+        setProfile(updateData.profile)
         setIsEditing(false)
         setAvatarFile(null)
+        
+        // Reload profile to get latest real data
+        await loadProfile()
         
         // Show warning if avatar upload failed but profile was saved
         if (avatarUploadError) {
@@ -275,7 +219,7 @@ export default function ProfilePage() {
           setTimeout(() => setError(null), 5000)
         }
       } else {
-        throw new Error(result.error || 'Failed to update profile')
+        throw new Error(updateData.error || 'Failed to update profile')
       }
     } catch (error: any) {
       console.error('Error saving profile:', error)

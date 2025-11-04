@@ -67,7 +67,9 @@
 | **Backend** | Node.js, Express.js, SQLite, Redis |
 | **Blockchain** | ethers.js v6, Hardhat, Solidity 0.8.20 |
 | **0G Network** | 0G Storage SDK 0.3.1, 0G Compute SDK 0.4.3 |
-| **Smart Contracts** | Factory.sol, BondingCurve.sol, MemeToken.sol, Uniswap V2 |
+| **Smart Contracts** | Factory.sol, BondingCurve.sol, MemeToken.sol, OGToken.sol, Uniswap V2, AutoTradingFactory |
+| **Network** | 0G Mainnet (Chain ID: 16661) |
+| **Storage** | 0G Storage (Mainnet Indexer) |
 
 ---
 
@@ -144,7 +146,14 @@
 ### **Prerequisites**
 - Node.js 18+
 - MetaMask or Web3 wallet
-- 0G Testnet tokens ([Faucet](https://faucet.0g.ai))
+- 0G Mainnet tokens (Bridge from Ethereum or purchase)
+
+### **Network Configuration**
+- **Network**: 0G Mainnet
+- **Chain ID**: 16661
+- **RPC URL**: `https://evmrpc.0g.ai`
+- **Storage Indexer**: `https://indexer-storage-turbo.0g.ai`
+- **Block Explorer**: `https://chainscan.0g.ai`
 
 ### **Installation**
 
@@ -164,21 +173,26 @@ npm run dev:all
 
 #### Frontend (`.env.local`)
 ```env
-NEXT_PUBLIC_EVM_RPC=https://evmrpc-testnet.0g.ai
+NEXT_PUBLIC_EVM_RPC=https://evmrpc.0g.ai
+NEXT_PUBLIC_INDEXER_RPC=https://indexer-storage-turbo.0g.ai
 NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=your_project_id
 NEXT_PUBLIC_BACKEND_URL=http://localhost:4000
-NEXT_PUBLIC_FACTORY_ADDRESS=0x560C7439E28359E2E8C0D72A52e8b5d6645766e7
-NEXT_PUBLIC_OG_RPC=https://evmrpc-testnet.0g.ai
+NEXT_PUBLIC_FACTORY_ADDRESS=0x18D1Bf1fa39E1598CC091c04A72b5BA16F4958ef
+NEXT_PUBLIC_OG_RPC=https://evmrpc.0g.ai
 ```
 
 #### Backend (`.env`)
 ```env
 PORT=4000
-OG_RPC=https://evmrpc-testnet.0g.ai
+RPC_URL=https://evmrpc.0g.ai
+OG_RPC=https://evmrpc.0g.ai
+INDEXER_RPC=https://indexer-storage-turbo.0g.ai
 PRIVATE_KEY=your_private_key
-FACTORY_ADDRESS=0x560C7439E28359E2E8C0D72A52e8b5d6645766e7
-ROUTER_ADDRESS=0x631b62C792121cE905e73195b6B3a09bd3557a19
-WETH_ADDRESS=0xB01825d6EbAB7E2c032797222A14B5c375069420
+FACTORY_ADDRESS=0xFb1A309B37f3AEe5B4A8c0fB4135b3732780Ab69
+ROUTER_ADDRESS=0x2Bb6c5118CB65C5E8cA774fCE59cd08024E9ad76
+WETH_ADDRESS=0x086de5895811550D9118112B6477F61462fe7b34
+AUTO_TRADING_FACTORY_ADDRESS=0x504CaC722dd52ae87EA6594F8640708EF14939Df
+APP_FACTORY_ADDRESS=0x18D1Bf1fa39E1598CC091c04A72b5BA16F4958ef
 ```
 
 ### **Available Scripts**
@@ -194,11 +208,48 @@ npm run dev:all          # All services
 npm run build            # Build frontend
 npm run build:all        # Build all services
 
-# Smart Contracts
-npm run deploy:dex:core  # Deploy DEX contracts
-npm run deploy:curve     # Deploy bonding curve
-npm run enable:trading   # Enable token trading
+# Smart Contracts (Mainnet)
+npm run compile          # Compile contracts
+npm run deploy:mainnet   # Deploy all contracts to 0G Mainnet
+npm run check:balance    # Check wallet balance on mainnet/testnet
+
+# Smart Contracts (Legacy - Testnet)
+npm run deploy:dex:core  # Deploy DEX contracts (testnet)
+npm run deploy:curve     # Deploy bonding curve (testnet)
+npm run enable:trading   # Enable token trading (testnet)
 ```
+
+---
+
+## 🏭 **Deployed Contracts (0G Mainnet)**
+
+All contracts have been deployed to 0G Mainnet. Contract addresses:
+
+### **DEX Core Contracts**
+- **WETH9**: `0x086de5895811550D9118112B6477F61462fe7b34`
+- **UniswapV2Factory**: `0xFb1A309B37f3AEe5B4A8c0fB4135b3732780Ab69`
+- **UniswapV2Router02**: `0x2Bb6c5118CB65C5E8cA774fCE59cd08024E9ad76`
+
+### **Trading Contracts**
+- **AutoTradingFactory**: `0x504CaC722dd52ae87EA6594F8640708EF14939Df`
+- **App Factory** (MemeToken + BondingCurve): `0x18D1Bf1fa39E1598CC091c04A72b5BA16F4958ef`
+  - Treasury: `0x1ab7d5ecbe2c551ebffdfa06661b77cc60dbd425`
+  - Default Fee: 500 bps (5%)
+
+### **0G Storage Contracts**
+- **OGToken**: `0x9D69091eC18d2f820B8a0cE35D0fa19A2Bee7563`
+
+### **Deployment Information**
+- **Network**: 0G Mainnet
+- **Chain ID**: 16661
+- **Deployment Time**: 2025-11-04
+- **Deployer**: `0x1aB7d5eCBe2c551eBfFdfA06661B77cc60dbd425`
+
+All deployment details are saved in `deployments/mainnet-deployment.json`.
+
+### **View on Explorer**
+- **Block Explorer**: [chainscan.0g.ai](https://chainscan.0g.ai)
+- **Storage Indexer**: [indexer-storage-turbo.0g.ai](https://indexer-storage-turbo.0g.ai)
 
 ---
 
@@ -390,15 +441,66 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 ---
 
+## 📦 **Deployment**
+
+### **Deploying to 0G Mainnet**
+
+1. **Compile Contracts**:
+   ```bash
+   npm run compile
+   ```
+
+2. **Check Wallet Balance**:
+   ```bash
+   npm run check:balance
+   ```
+   Ensure you have at least 0.1 0G for gas fees.
+
+3. **Deploy All Contracts**:
+   ```bash
+   npm run deploy:mainnet
+   ```
+
+The deployment script will:
+- Deploy DEX core contracts (WETH, Factory, Router)
+- Deploy AutoTradingFactory
+- Deploy App Factory (MemeToken + BondingCurve creator)
+- Deploy OGToken (0G Storage integration)
+- Save all addresses to `deployments/` directory
+- Update `lib/trading-config.ts` automatically
+
+### **Deployment Configuration**
+
+The deployment script uses hardcoded wallet credentials in `scripts/deployAllMainnet.js`. For production, consider:
+- Using environment variables for private keys
+- Using a hardware wallet or secure key management
+- Verifying contracts on the block explorer after deployment
+
+### **Network Configuration**
+
+Update `hardhat.config.js` to include mainnet:
+```javascript
+"0g-mainnet": {
+  url: "https://evmrpc.0g.ai",
+  chainId: 16661,
+  accounts: [process.env.PRIVATE_KEY],
+  gas: 8000000,
+  maxPriorityFeePerGas: 2000000000,
+  maxFeePerGas: 2000000000
+}
+```
+
+---
+
 ## 🔗 **Links**
 
 <div align="center">
 
 [![Website](https://img.shields.io/badge/Website-0gpump.vercel.app-blue?style=for-the-badge)](https://0gpump.vercel.app)
-[![0G Explorer](https://img.shields.io/badge/Explorer-0G%20Chain-purple?style=for-the-badge)](https://chainscan-galileo.0g.ai)
+[![0G Explorer](https://img.shields.io/badge/Explorer-0G%20Mainnet-purple?style=for-the-badge)](https://chainscan.0g.ai)
 [![0G Docs](https://img.shields.io/badge/Docs-0G%20Network-green?style=for-the-badge)](https://docs.0g.ai)
 
-**[Live Demo](https://0gpump.vercel.app)** • **[GitHub Repo](https://github.com/SCARPxVeNOM/0gpump-production)** • **[0G Testnet](https://chainscan-galileo.0g.ai)** • **[Get Testnet Tokens](https://faucet.0g.ai)**
+**[Live Demo](https://0gpump.vercel.app)** • **[GitHub Repo](https://github.com/SCARPxVeNOM/0gpump-production)** • **[0G Mainnet Explorer](https://chainscan.0g.ai)** • **[0G Documentation](https://docs.0g.ai)**
 
 </div>
 

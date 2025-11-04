@@ -22,6 +22,19 @@ module.exports = {
       gasPrice: undefined,
       maxPriorityFeePerGas: 2000000000,
       maxFeePerGas: 2000000000
+    },
+    "0g-mainnet": {
+      url: "https://evmrpc.0g.ai",
+      chainId: 16661,
+      accounts: process.env.DEPLOYER_PRIVATE_KEY 
+        ? [process.env.DEPLOYER_PRIVATE_KEY] 
+        : process.env.PRIVATE_KEY 
+          ? [process.env.PRIVATE_KEY] 
+          : [],
+      gas: 8000000,
+      gasPrice: undefined,
+      maxPriorityFeePerGas: 2000000000,
+      maxFeePerGas: 2000000000
     }
   }
 };

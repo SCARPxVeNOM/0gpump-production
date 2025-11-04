@@ -7,8 +7,8 @@ import os from "os";
 
 dotenv.config();
 
-const INDEXER_RPC = "https://indexer-storage-testnet-turbo.0g.ai";
-const RPC_URL = process.env.RPC_ENDPOINT || "https://evmrpc-testnet.0g.ai";
+const INDEXER_RPC = process.env.INDEXER_RPC || "https://indexer-storage-turbo.0g.ai";
+const RPC_URL = process.env.RPC_ENDPOINT || process.env.RPC_URL || "https://evmrpc.0g.ai";
 const DIALOGUE_MAP_FILE = path.join(os.tmpdir(), '0g-dialogue-map.json');
 
 export class StorageManager {

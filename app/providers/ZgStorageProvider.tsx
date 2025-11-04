@@ -20,8 +20,8 @@ export const ZgStorageProvider = ({ children }: { children: ReactNode }) => {
       setError(undefined);
       
       const zgStorageService = getZgStorageService({
-        rpcUrl: 'https://evmrpc-testnet.0g.ai/',
-        indexerRpc: 'https://indexer-storage-testnet-turbo.0g.ai',
+        rpcUrl: process.env.NEXT_PUBLIC_EVM_RPC || 'https://evmrpc.0g.ai/',
+        indexerRpc: process.env.NEXT_PUBLIC_INDEXER_RPC || 'https://indexer-storage-turbo.0g.ai',
       });
 
       setZgStorage(zgStorageService);

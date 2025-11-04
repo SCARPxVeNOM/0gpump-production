@@ -1,9 +1,9 @@
 {
+  "network": "0g-mainnet",
+  "chainId": 16661,
   "factoryAddress": "0xFb1A309B37f3AEe5B4A8c0fB4135b3732780Ab69",
   "routerAddress": "0x2Bb6c5118CB65C5E8cA774fCE59cd08024E9ad76",
   "wethAddress": "0x086de5895811550D9118112B6477F61462fe7b34",
-  "network": "0g-mainnet",
-  "chainId": 16661,
-  "deployerAddress": "0x1aB7d5eCBe2c551eBfFdfA06661B77cc60dbd425",
-  "deploymentTime": "2025-11-04T08:33:24.774Z"
+  "deployer": "0x1aB7d5eCBe2c551eBfFdfA06661B77cc60dbd425",
+  "deployedAt": "2025-11-04T08:33:24.761Z"
 }

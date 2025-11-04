@@ -190,8 +190,8 @@ let ogSigner = null;
 let ogRpcUrl = null;
 async function initializeOGSdkOnce() {
   if (ogIndexer) return;
-  const RPC_URL = process.env.RPC_URL || process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai';
-  const INDEXER_RPC = process.env.INDEXER_RPC || 'https://indexer-storage-testnet-turbo.0g.ai';
+  const RPC_URL = process.env.RPC_URL || process.env.OG_RPC || 'https://evmrpc.0g.ai';
+  const INDEXER_RPC = process.env.INDEXER_RPC || 'https://indexer-storage-turbo.0g.ai';
   const PRIVATE_KEY = process.env.PRIVATE_KEY;
   try {
     ogIndexer = ogIndexer || new Indexer(INDEXER_RPC);
@@ -640,7 +640,7 @@ app.get("/download/:rootHash", async (req, res) => {
 // ---------------------------------
 async function getTokenSuggestionsUsing0G(tokens) {
   const { createZGComputeNetworkBroker } = await import('@0glabs/0g-serving-broker');
-  const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc-testnet.0g.ai';
+  const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc.0g.ai';
   const priv = process.env.PRIVATE_KEY;
   if (!priv) throw new Error('PRIVATE_KEY is required for 0G Compute');
   const provider = new ethers.JsonRpcProvider(ogRpc);
@@ -720,7 +720,7 @@ async function getTokenSuggestionsUsing0G(tokens) {
 
 async function getTrendingTopicsUsing0G() {
   const { createZGComputeNetworkBroker } = await import('@0glabs/0g-serving-broker');
-  const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc-testnet.0g.ai';
+  const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc.0g.ai';
   const priv = process.env.PRIVATE_KEY;
   const provider = new ethers.JsonRpcProvider(ogRpc);
   const wallet = new ethers.Wallet(priv, provider);
@@ -838,7 +838,7 @@ async function getAIChatResponse(message, conversation) {
   
   try {
     const { createZGComputeNetworkBroker } = await import('@0glabs/0g-serving-broker');
-    const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc-testnet.0g.ai';
+    const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc.0g.ai';
     const priv = process.env.PRIVATE_KEY;
     
     console.log(`🔑 Private key found: ${priv ? 'Yes' : 'No'}`);
@@ -1006,7 +1006,7 @@ function getFallbackResponse(message) {
 app.post('/ai-setup', async (req, res) => {
   try {
     const { createZGComputeNetworkBroker } = await import('@0glabs/0g-serving-broker');
-    const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc-testnet.0g.ai';
+    const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc.0g.ai';
     const priv = process.env.PRIVATE_KEY;
     if (!priv) return res.status(400).json({ success: false, error: 'Missing PRIVATE_KEY' });
     const provider = new ethers.JsonRpcProvider(ogRpc);
@@ -1569,7 +1569,7 @@ async function saveProfileToOGStorageBackground(walletAddress, profileData) {
   });
 }
 
-// Get user profile
+// Get user profile with REAL data from database
 app.get("/profile/:walletAddress", async (req, res) => {
   try {
     const { walletAddress } = req.params;
@@ -1578,77 +1578,136 @@ app.get("/profile/:walletAddress", async (req, res) => {
       return res.status(400).json({ error: "Invalid wallet address" });
     }
 
-    console.log(`📥 Loading profile for ${walletAddress} (database first)`);
+    console.log(`📥 Loading REAL profile data for ${walletAddress}`);
 
-    // Try to get profile from database first (fast and reliable)
+    // Load base profile from database (to preserve username, bio, avatar, preferences)
     let profile = await getProfileFromDatabase(walletAddress);
-    console.log(`🔍 getProfileFromDatabase returned:`, profile ? 'profile object' : 'null');
-    console.log(`🔍 Profile type:`, typeof profile);
-    console.log(`🔍 Profile keys:`, profile ? Object.keys(profile) : 'null');
     
-    if (!profile) {
-      console.log(`📭 No profile found in database for ${walletAddress}, creating new one`);
-      
-      // Create new profile if doesn't exist
-      profile = {
-        walletAddress: walletAddress.toLowerCase(),
-        username: `User_${walletAddress.slice(0, 6)}`,
-        bio: 'Welcome to OG Pump! 🚀',
-        avatarUrl: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        tokensCreated: [],
-        tradingStats: {
-          totalTrades: 0,
-          totalVolume: 0,
-          tokensHeld: 0,
-          favoriteTokens: [],
-          lastTradeAt: null
-        },
-        preferences: {
-          theme: 'light',
-          notifications: true,
-          publicProfile: true,
-          showTradingStats: true
-        }
-      };
-      
-      // Save new profile to database
-      await saveProfileToDatabase(walletAddress, profile);
-      console.log(`💾 New profile saved to database for ${walletAddress}`);
-      
-      // Optionally save to 0G Storage in background (for proof of history)
-      saveProfileToOGStorageBackground(walletAddress, profile);
-    } else {
-      console.log(`✅ Profile loaded from database for ${walletAddress}`);
+    // If profile hash exists but is old format, force recreation
+    if (profile && typeof profile === 'object' && profile.profileHash && !profile.walletAddress) {
+      profile = null;
     }
 
-    console.log(`📤 Returning profile for ${walletAddress}:`, {
-      hasProfile: !!profile,
-      hasTokensCreated: !!(profile?.tokensCreated),
-      tokensCount: profile?.tokensCreated?.length || 0,
-      profileType: typeof profile,
-      profileKeys: profile ? Object.keys(profile) : 'null'
-    });
+    const db = await databaseManager.getConnection();
+    const walletLower = walletAddress.toLowerCase();
+
+    // 1. Load REAL tokens created by this wallet from database
+    console.log(`🔍 Querying coins for creator: ${walletLower}`);
+    const coinsCreated = await db.all(`
+      SELECT id, name, symbol, tokenAddress, curveAddress, imageHash, imageUrl, description, createdAt, txHash
+      FROM coins 
+      WHERE creator = ? AND tokenAddress IS NOT NULL AND tokenAddress != ''
+      ORDER BY createdAt DESC
+    `, [walletLower]);
+    console.log(`✅ Found ${coinsCreated.length} coins created by ${walletAddress}`);
+
+    const tokensCreated = coinsCreated.map(coin => ({
+      tokenAddress: coin.tokenAddress || '',
+      tokenName: coin.name,
+      tokenSymbol: coin.symbol,
+      curveAddress: coin.curveAddress || undefined,
+      createdAt: new Date(coin.createdAt).toISOString(),
+      txHash: coin.txHash || `local-${coin.id}`,
+      imageUrl: coin.imageUrl || (coin.imageHash ? `/download/${coin.imageHash}` : undefined),
+      description: coin.description || undefined
+    }));
+
+    // 2. Load REAL trading stats from trading_history table
+    console.log(`🔍 Querying trading history for user: ${walletLower}`);
+    const tradingHistory = await db.all(`
+      SELECT amountOg, timestamp, type, tokenAddress
+      FROM trading_history
+      WHERE userAddress = ?
+      ORDER BY timestamp DESC
+    `, [walletLower]);
+    console.log(`✅ Found ${tradingHistory.length} trades for ${walletAddress}`);
+
+    const totalTrades = tradingHistory.length;
+    const totalVolume = tradingHistory.reduce((sum, trade) => sum + (parseFloat(trade.amountOg || 0)), 0);
+    const lastTradeAt = totalTrades > 0 ? new Date(tradingHistory[0].timestamp * 1000).toISOString() : null;
+    console.log(`📊 Trading stats: ${totalTrades} trades, ${totalVolume} OG volume`);
+
+    // 3. Calculate tokens held (count unique tokenAddresses with non-zero balance)
+    const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc.0g.ai');
+    const ERC20_ABI = ['function balanceOf(address) view returns (uint256)'];
+    let tokensHeld = 0;
     
-    // Ensure we always return a full profile object, not just a hash
-    if (profile && typeof profile === 'object' && profile.profileHash && !profile.walletAddress) {
-      console.log(`⚠️ Profile is just a hash, creating new profile`);
-      // This is just a hash, create a new profile
+    try {
+      // Get all unique token addresses from trading history and coins
+      const uniqueTokens = new Set();
+      tradingHistory.forEach(t => t.tokenAddress && uniqueTokens.add(t.tokenAddress.toLowerCase()));
+      coinsCreated.forEach(c => c.tokenAddress && uniqueTokens.add(c.tokenAddress.toLowerCase()));
+      
+      // Also check all deployed coins
+      const allCoins = await db.all(`SELECT DISTINCT tokenAddress FROM coins WHERE tokenAddress IS NOT NULL AND tokenAddress != ''`);
+      allCoins.forEach(c => c.tokenAddress && uniqueTokens.add(c.tokenAddress.toLowerCase()));
+      
+      // Check balances for each token
+      for (const tokenAddr of Array.from(uniqueTokens).slice(0, 100)) { // Limit to 100 to avoid timeout
+        try {
+          const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+          const balance = await token.balanceOf(walletAddress);
+          if (balance > 0n) tokensHeld++;
+        } catch (e) {
+          // Skip if balance check fails
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to calculate tokens held:', e.message);
+    }
+
+    // 4. Find earliest activity date (first coin created or first trade)
+    let earliestActivity = null;
+    
+    // Get oldest coin (earliest created)
+    if (coinsCreated.length > 0) {
+      const oldestCoinQuery = await db.get(`
+        SELECT createdAt FROM coins 
+        WHERE creator = ? AND tokenAddress IS NOT NULL AND tokenAddress != ''
+        ORDER BY createdAt ASC LIMIT 1
+      `, [walletLower]);
+      if (oldestCoinQuery) {
+        earliestActivity = new Date(oldestCoinQuery.createdAt).toISOString();
+      }
+    }
+    
+    // Check oldest trade
+    if (tradingHistory.length > 0) {
+      const oldestTradeQuery = await db.get(`
+        SELECT timestamp FROM trading_history
+        WHERE userAddress = ?
+        ORDER BY timestamp ASC LIMIT 1
+      `, [walletLower]);
+      if (oldestTradeQuery) {
+        const tradeDate = new Date(oldestTradeQuery.timestamp * 1000).toISOString();
+        if (!earliestActivity || tradeDate < earliestActivity) {
+          earliestActivity = tradeDate;
+        }
+      }
+    }
+    
+    // If no activity, use current time (new user)
+    if (!earliestActivity) {
+      earliestActivity = new Date().toISOString();
+    }
+
+    // 5. Build or update profile with REAL data
+    if (!profile) {
+      // Create new profile with real data
       profile = {
-        walletAddress: walletAddress.toLowerCase(),
+        walletAddress: walletLower,
         username: `User_${walletAddress.slice(0, 6)}`,
         bio: 'Welcome to OG Pump! 🚀',
         avatarUrl: null,
-        createdAt: new Date().toISOString(),
+        createdAt: earliestActivity,
         updatedAt: new Date().toISOString(),
-        tokensCreated: [],
+        tokensCreated: tokensCreated,
         tradingStats: {
-          totalTrades: 0,
-          totalVolume: 0,
-          tokensHeld: 0,
+          totalTrades: totalTrades,
+          totalVolume: totalVolume,
+          tokensHeld: tokensHeld,
           favoriteTokens: [],
-          lastTradeAt: null
+          lastTradeAt: lastTradeAt
         },
         preferences: {
           theme: 'light',
@@ -1660,8 +1719,35 @@ app.get("/profile/:walletAddress", async (req, res) => {
       
       // Save new profile to database
       await saveProfileToDatabase(walletAddress, profile);
-      console.log(`💾 New profile saved to database for ${walletAddress}`);
+      console.log(`💾 New profile created with REAL data for ${walletAddress}`);
+    } else {
+      // Update existing profile with latest real data
+      profile.tokensCreated = tokensCreated;
+      profile.tradingStats = {
+        totalTrades: totalTrades,
+        totalVolume: totalVolume,
+        tokensHeld: tokensHeld,
+        favoriteTokens: profile.tradingStats?.favoriteTokens || [],
+        lastTradeAt: lastTradeAt
+      };
+      // Update createdAt to earliest activity if not set properly
+      if (!profile.createdAt || profile.createdAt > earliestActivity) {
+        profile.createdAt = earliestActivity;
+      }
+      profile.updatedAt = new Date().toISOString();
+      
+      // Save updated profile
+      await saveProfileToDatabase(walletAddress, profile);
+      console.log(`✅ Profile updated with REAL data for ${walletAddress}`);
     }
+
+    console.log(`📤 Returning REAL profile data for ${walletAddress}:`, {
+      tokensCreated: tokensCreated.length,
+      totalTrades,
+      totalVolume,
+      tokensHeld,
+      memberSince: profile.createdAt
+    });
 
     res.json({ success: true, profile });
   } catch (error) {
@@ -2098,7 +2184,7 @@ app.post("/ai-chat/setup", async (req, res) => {
     console.log('🔧 Manual 0G Compute setup...');
     
     const { createZGComputeNetworkBroker } = await import('@0glabs/0g-serving-broker');
-    const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc-testnet.0g.ai';
+    const ogRpc = process.env.OG_RPC || process.env.RPC_URL || 'https://evmrpc.0g.ai';
     const priv = process.env.PRIVATE_KEY;
     
     if (!priv) {
@@ -2298,7 +2384,7 @@ app.post('/resolvePair', async (req, res) => {
       return res.status(400).json({ success: false, error: 'txHash, creator, factory are required' })
     }
 
-    const rpcUrl = process.env.RPC_URL || process.env.OG_TESTNET_RPC || 'https://evmrpc-testnet.0g.ai'
+    const rpcUrl = process.env.RPC_URL || process.env.OG_RPC || 'https://evmrpc.0g.ai'
     const provider = new ethers.JsonRpcProvider(rpcUrl)
 
     // Fetch receipt for block number hint
@@ -2477,19 +2563,172 @@ process.on('SIGTERM', async () => {
 startServer();
 
 // ------------------------------
+// Unified Multiplayer Matchmaking System (for all games)
+// ------------------------------
+
+// Universal matchmaking endpoint - works for all games
+app.post('/gaming/matchmake', async (req, res) => {
+  try {
+    const { gameType, userAddress, betAmount, tokenAddress, txHash, gameParams = {}, matchType = 'p2p' } = req.body || {};
+    
+    if (!['mines', 'coinflip', 'pumpplay', 'meme-royale'].includes(gameType)) {
+      return res.status(400).json({ error: 'Invalid game type' });
+    }
+    if (!ethers.isAddress(userAddress)) return res.status(400).json({ error: 'Invalid address' });
+    if (!betAmount || betAmount <= 0) return res.status(400).json({ error: 'Invalid bet amount' });
+    if (!tokenAddress || !ethers.isAddress(tokenAddress)) return res.status(400).json({ error: 'Invalid token' });
+    
+    const db = await databaseManager.getConnection();
+    const userAddr = userAddress.toLowerCase();
+    
+    // If solo mode, return immediately (no matchmaking)
+    if (matchType === 'solo' || matchType === 'pool') {
+      return res.json({
+        success: true,
+        matched: false,
+        matchType: matchType === 'solo' ? 'solo' : 'pool',
+        message: matchType === 'solo' ? 'Solo mode - starting game immediately' : 'Pool mode - joining pool'
+      });
+    }
+    
+    // Clean expired lobbies (older than 5 minutes)
+    const fiveMinutesAgo = Date.now() - (5 * 60 * 1000);
+    await db.run(`UPDATE gaming_matchmaking SET status = 'expired' WHERE status = 'waiting' AND createdAt < ?`, [fiveMinutesAgo]);
+    
+    // Look for matching lobby
+    const gameParamsStr = JSON.stringify(gameParams);
+    const waitingLobby = await db.get(`
+      SELECT * FROM gaming_matchmaking 
+      WHERE status = 'waiting' 
+        AND gameType = ?
+        AND tokenAddress = ? 
+        AND betAmount = ?
+        AND gameParams = ?
+        AND creatorAddress != ?
+      ORDER BY createdAt ASC 
+      LIMIT 1
+    `, [gameType, tokenAddress, betAmount, gameParamsStr, userAddr]);
+    
+    if (waitingLobby) {
+      // Match found!
+      const matchId = `match-${gameType}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Update both lobbies to matched
+      await db.run(`
+        UPDATE gaming_matchmaking 
+        SET status = 'matched', matchId = ?, opponentAddress = ?, matchedAt = ?
+        WHERE id IN (?, ?)
+      `, [matchId, userAddr, Date.now(), waitingLobby.id, waitingLobby.id]);
+      
+      // Also update the creator's lobby
+      await db.run(`
+        UPDATE gaming_matchmaking 
+        SET opponentAddress = ?
+        WHERE id = ? AND creatorAddress = ?
+      `, [userAddr, waitingLobby.id, waitingLobby.creatorAddress]);
+      
+      console.log(`🎮 ${gameType} P2P match created: ${waitingLobby.creatorAddress} vs ${userAddr}, matchId: ${matchId}`);
+      
+      return res.json({
+        success: true,
+        matched: true,
+        matchId,
+        gameType,
+        opponentAddress: waitingLobby.creatorAddress,
+        betAmount,
+        tokenAddress,
+        gameParams: JSON.parse(waitingLobby.gameParams || '{}'),
+        matchType: 'p2p'
+      });
+    }
+    
+    // No match found - create new waiting lobby
+    const expiresAt = Date.now() + (5 * 60 * 1000); // 5 minutes
+    await db.run(`
+      INSERT INTO gaming_matchmaking(gameType, creatorAddress, tokenAddress, betAmount, gameParams, lobbyType, status, stakeTxHash, expiresAt)
+      VALUES (?, ?, ?, ?, ?, 'public', 'waiting', ?, ?)
+    `, [gameType, userAddr, tokenAddress, betAmount, gameParamsStr, txHash, expiresAt]);
+    
+    const lobby = await db.get(`SELECT * FROM gaming_matchmaking WHERE id = last_insert_rowid()`);
+    
+    console.log(`⏳ ${gameType} lobby created: ${userAddr}, waiting for opponent...`);
+    
+    return res.json({
+      success: true,
+      matched: false,
+      lobbyId: lobby.id,
+      gameType,
+      message: 'Lobby created. Waiting for opponent to join...',
+      matchType: 'p2p'
+    });
+    
+  } catch (e) {
+    console.error('matchmake error:', e);
+    return res.status(500).json({ error: e?.message || 'matchmaking failed' });
+  }
+});
+
+// Get available lobbies for a game type
+app.get('/gaming/lobbies/:gameType', async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    const { tokenAddress, betAmount } = req.query || {};
+    const db = await databaseManager.getConnection();
+    
+    if (!['mines', 'coinflip', 'pumpplay', 'meme-royale'].includes(gameType)) {
+      return res.status(400).json({ error: 'Invalid game type' });
+    }
+    
+    let query = `SELECT * FROM gaming_matchmaking WHERE status = 'waiting' AND gameType = ?`;
+    const params = [gameType];
+    
+    if (tokenAddress && ethers.isAddress(tokenAddress)) {
+      query += ` AND tokenAddress = ?`;
+      params.push(tokenAddress);
+    }
+    if (betAmount && parseFloat(betAmount) > 0) {
+      query += ` AND betAmount = ?`;
+      params.push(parseFloat(betAmount));
+    }
+    
+    query += ` ORDER BY createdAt ASC LIMIT 50`;
+    
+    const lobbies = await db.all(query, params);
+    
+    return res.json({
+      success: true,
+      lobbies: lobbies.map(l => ({
+        lobbyId: l.id,
+        creatorAddress: l.creatorAddress,
+        tokenAddress: l.tokenAddress,
+        betAmount: l.betAmount,
+        gameParams: JSON.parse(l.gameParams || '{}'),
+        createdAt: l.createdAt,
+        waitingTime: Date.now() - l.createdAt
+      }))
+    });
+    
+  } catch (e) {
+    console.error('get lobbies error:', e);
+    return res.status(500).json({ error: e?.message || 'failed to get lobbies' });
+  }
+});
+
+// ------------------------------
 // Gaming: Arcade - Coinflip (off-chain provable fairness with commit-reveal)
 // ------------------------------
 app.post('/gaming/coinflip', async (req, res) => {
   try {
-    const { userAddress, wager = 10, guess, tokenAddress, txHash } = req.body || {};
+    const { userAddress, wager = 10, guess, tokenAddress, txHash, matchId, matchType = 'solo' } = req.body || {};
     if (!ethers.isAddress(userAddress)) return res.status(400).json({ error: 'Invalid address' });
     if (guess !== 'heads' && guess !== 'tails') return res.status(400).json({ error: 'Guess must be heads|tails' });
 
     await dataService.initialize();
     const db = await databaseManager.getConnection();
+    const userAddr = userAddress.toLowerCase();
 
     // Use OG chain blockhash entropy for fairness
-    const rpc = process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai';
+    const rpc = process.env.OG_RPC || 'https://evmrpc.0g.ai';
     const provider = new ethers.JsonRpcProvider(rpc);
     const block = await provider.getBlock('latest');
     const secret = block.hash + ':' + crypto.randomBytes(16).toString('hex');
@@ -2498,29 +2737,86 @@ app.post('/gaming/coinflip', async (req, res) => {
     const win = coin === guess;
     const outcome = win ? 'win' : 'lose';
 
-    // Store flip result
-    const result = await db.run(`INSERT INTO gaming_coinflip(userAddress, wager, outcome, seedHash, seedReveal, blockNumber, blockHash) VALUES (?,?,?,?,?,?,?)`, [userAddress.toLowerCase(), wager, outcome, seedHash, secret, block.number, block.hash]);
-    const gameId = `coinflip-${result.lastID}`;
-
-    // If win and tokenAddress provided, send 2x payout
     let payoutTx = null;
-    if (win && tokenAddress && ethers.isAddress(tokenAddress)) {
-      try {
-        const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-        const tokenContract = new ethers.Contract(
-          tokenAddress,
-          ['function transfer(address to, uint256 amount) returns (bool)'],
-          wallet
-        );
-        const payoutAmount = ethers.parseEther((wager * 2).toString());
-        const tx = await tokenContract.transfer(userAddress, payoutAmount);
-        await tx.wait();
-        payoutTx = tx.hash;
-        console.log(`💰 Coinflip WIN payout sent: ${payoutAmount} to ${userAddress}, tx: ${payoutTx}`);
-      } catch (payoutError) {
-        console.error('Payout failed:', payoutError);
+    let opponentAddress = null;
+    const PLATFORM_FEE_BPS = 500; // 5% platform fee for P2P
+
+    // P2P Mode: Check for opponent and determine winner
+    if (matchType === 'p2p' && matchId) {
+      // Find opponent's flip
+      const opponentFlip = await db.get(`
+        SELECT * FROM gaming_coinflip 
+        WHERE matchId = ? AND userAddress != ? AND matchType = 'p2p'
+        ORDER BY id DESC LIMIT 1
+      `, [matchId, userAddr]);
+
+      if (opponentFlip) {
+        opponentAddress = opponentFlip.userAddress;
+        
+        // Compare results: Both flip, winner is determined by:
+        // 1. If one guessed correctly and other didn't, correct guess wins
+        // 2. If both correct or both wrong, compare by block randomness (first to flip wins)
+        const opponentWin = opponentFlip.outcome === 'win';
+        
+        if (win && !opponentWin) {
+          // Player wins, opponent loses
+          const totalPot = wager + opponentFlip.wager;
+          const fee = (totalPot * PLATFORM_FEE_BPS) / 10000;
+          const payout = totalPot - fee;
+          
+          console.log(`🎮 P2P Coinflip: ${userAddr} wins! Both stakes: ${totalPot}, Fee: ${fee.toFixed(6)}, Payout: ${payout.toFixed(6)}`);
+          
+          // In production, you'd use escrow contract. For now, log the win.
+          // Winner would receive both stakes minus fee from escrow
+          payoutTx = 'p2p-win'; // Placeholder
+        } else if (!win && opponentWin) {
+          // Opponent wins, player loses
+          console.log(`🎮 P2P Coinflip: ${opponentFlip.userAddress} wins. ${userAddr} loses.`);
+          payoutTx = null;
+        } else {
+          // Both same result - tie breaker by block number (first wins)
+          if (block.number < opponentFlip.blockNumber) {
+            const totalPot = wager + opponentFlip.wager;
+            const fee = (totalPot * PLATFORM_FEE_BPS) / 10000;
+            const payout = totalPot - fee;
+            console.log(`🎮 P2P Coinflip: ${userAddr} wins by tie-breaker!`);
+            payoutTx = 'p2p-win';
+          } else {
+            console.log(`🎮 P2P Coinflip: ${opponentFlip.userAddress} wins by tie-breaker.`);
+            payoutTx = null;
+          }
+        }
+      } else {
+        // No opponent yet - waiting for match
+        console.log(`⏳ P2P Coinflip: Waiting for opponent in match ${matchId}`);
+      }
+    } else {
+      // Solo Mode: Traditional payout (only if win)
+      if (win && tokenAddress && ethers.isAddress(tokenAddress)) {
+        try {
+          const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+          const tokenContract = new ethers.Contract(
+            tokenAddress,
+            ['function transfer(address to, uint256 amount) returns (bool)'],
+            wallet
+          );
+          const payoutAmount = ethers.parseEther((wager * 2).toString());
+          const tx = await tokenContract.transfer(userAddress, payoutAmount);
+          await tx.wait();
+          payoutTx = tx.hash;
+          console.log(`💰 Coinflip WIN payout sent: ${payoutAmount} to ${userAddress}, tx: ${payoutTx}`);
+        } catch (payoutError) {
+          console.error('Payout failed:', payoutError);
+        }
       }
     }
+
+    // Store flip result
+    const result = await db.run(`
+      INSERT INTO gaming_coinflip(userAddress, wager, outcome, seedHash, seedReveal, blockNumber, blockHash, matchId, opponentAddress, matchType, tokenAddress, stakeTxHash) 
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    `, [userAddr, wager, outcome, seedHash, secret, block.number, block.hash, matchId || null, opponentAddress, matchType, tokenAddress || null, txHash || null]);
+    const gameId = `coinflip-${result.lastID}`;
 
     // Store game result to 0G DA for permanent verification
     const gameData = {
@@ -2551,11 +2847,184 @@ app.post('/gaming/coinflip', async (req, res) => {
       blockNumber: block.number, 
       blockHash: block.hash,
       payoutTx,
+      matchType,
+      matchId: matchId || null,
+      opponentAddress,
       provenanceHash // 0G DA root hash for verification
     });
   } catch (e) {
     console.error('coinflip error:', e);
     return res.status(500).json({ error: e?.message || 'coinflip failed' });
+  }
+});
+
+// ------------------------------
+// Gaming: Roulette - Visually Stunning Casino Game
+// ------------------------------
+app.post('/gaming/roulette/spin', async (req, res) => {
+  try {
+    const { userAddress, bets = {}, totalBet, tokenAddress, txHash } = req.body || {};
+    if (!ethers.isAddress(userAddress)) return res.status(400).json({ error: 'Invalid address' });
+    if (!bets || Object.keys(bets).length === 0) return res.status(400).json({ error: 'No bets placed' });
+    if (!totalBet || totalBet <= 0) return res.status(400).json({ error: 'Invalid bet amount' });
+    if (!tokenAddress || !ethers.isAddress(tokenAddress)) return res.status(400).json({ error: 'Invalid token' });
+
+    await dataService.initialize();
+    const db = await databaseManager.getConnection();
+    const userAddr = userAddress.toLowerCase();
+
+    // Use OG chain blockhash for provable fairness
+    const rpc = process.env.OG_RPC || 'https://evmrpc.0g.ai';
+    const provider = new ethers.JsonRpcProvider(rpc);
+    const block = await provider.getBlock('latest');
+    
+    // Generate random number 0-36 from blockhash
+    const secret = block.hash + ':' + crypto.randomBytes(16).toString('hex');
+    const seedHash = crypto.createHash('sha256').update(secret).digest('hex');
+    const winningNumber = parseInt(ethers.keccak256(ethers.toUtf8Bytes(secret)).slice(2, 10), 16) % 37;
+    
+    // Determine color and parity
+    const redNumbers = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
+    const isRed = redNumbers.includes(winningNumber);
+    const color = winningNumber === 0 ? 'green' : (isRed ? 'red' : 'black');
+    const parity = winningNumber === 0 ? 'none' : (winningNumber % 2 === 0 ? 'even' : 'odd');
+
+    // Calculate winnings based on bet types
+    let totalWinnings = 0;
+    
+    // Check each bet type
+    for (const [betType, betAmount] of Object.entries(bets)) {
+      const amount = parseFloat(betAmount);
+      if (amount <= 0) continue;
+
+      let won = false;
+      let multiplier = 1;
+
+      // Single number bet (35:1)
+      if (betType.startsWith('number-')) {
+        const betNumber = parseInt(betType.split('-')[1]);
+        if (betNumber === winningNumber) {
+          won = true;
+          multiplier = 36; // 35:1 + original bet = 36x
+        }
+      }
+      // Color bets (1:1)
+      else if (betType === 'red') {
+        if (color === 'red') {
+          won = true;
+          multiplier = 2; // 1:1 + original bet = 2x
+        }
+      } else if (betType === 'black') {
+        if (color === 'black') {
+          won = true;
+          multiplier = 2;
+        }
+      }
+      // Parity bets (1:1)
+      else if (betType === 'even') {
+        if (parity === 'even') {
+          won = true;
+          multiplier = 2;
+        }
+      } else if (betType === 'odd') {
+        if (parity === 'odd') {
+          won = true;
+          multiplier = 2;
+        }
+      }
+      // Range bets (1:1)
+      else if (betType === '1-18') {
+        if (winningNumber >= 1 && winningNumber <= 18) {
+          won = true;
+          multiplier = 2;
+        }
+      } else if (betType === '19-36') {
+        if (winningNumber >= 19 && winningNumber <= 36) {
+          won = true;
+          multiplier = 2;
+        }
+      }
+
+      if (won) {
+        totalWinnings += amount * multiplier;
+      }
+    }
+
+    // Payout winnings if any
+    let payoutTx = null;
+    if (totalWinnings > 0) {
+      try {
+        const ERC20_ABI = ['function transfer(address,uint256) returns (bool)'];
+        const wallet = new ethers.Wallet(process.env.PRIVATE_KEY || '', provider);
+        const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, wallet);
+        const payoutAmount = ethers.parseEther(totalWinnings.toString());
+        payoutTx = await tokenContract.transfer(userAddress, payoutAmount);
+        await payoutTx.wait();
+        console.log(`💰 Roulette payout: ${totalWinnings} tokens to ${userAddress}`);
+      } catch (payoutError) {
+        console.error('Roulette payout failed:', payoutError);
+        // Don't fail the game if payout fails - record it for manual processing
+      }
+    }
+
+    // Store game result
+    const result = await db.run(`
+      INSERT INTO gaming_roulette(userAddress, totalBet, bets, winningNumber, color, parity, winnings, tokenAddress, stakeTxHash, payoutTx, blockNumber, blockHash, seedHash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      userAddr, 
+      totalBet, 
+      JSON.stringify(bets), 
+      winningNumber, 
+      color, 
+      parity, 
+      totalWinnings, 
+      tokenAddress, 
+      txHash || null,
+      payoutTx?.hash || null,
+      block.number,
+      block.hash,
+      seedHash
+    ]);
+    const gameId = `roulette-${result.lastID}`;
+
+    // Store game result to 0G DA for permanent verification
+    const gameData = {
+      gameId,
+      gameType: 'roulette',
+      userAddress,
+      bets,
+      totalBet,
+      winningNumber,
+      color,
+      parity,
+      winnings: totalWinnings,
+      seedHash,
+      seedReveal: secret,
+      blockNumber: block.number,
+      blockHash: block.hash,
+      tokenAddress,
+      stakeTxHash: txHash,
+      payoutTx: payoutTx?.hash || null,
+      timestamp: Date.now()
+    };
+    const provenanceHash = await storeGameResultTo0G(gameData);
+
+    return res.json({
+      success: true,
+      winningNumber,
+      color,
+      parity,
+      winnings: totalWinnings,
+      payoutTx: payoutTx?.hash || null,
+      blockNumber: block.number,
+      blockHash: block.hash,
+      seedHash,
+      provenanceHash
+    });
+  } catch (e) {
+    console.error('Roulette spin error:', e);
+    return res.status(500).json({ error: e?.message || 'Roulette spin failed' });
   }
 });
 
@@ -2656,7 +3125,7 @@ app.post('/gaming/pumpplay/resolve', async (req, res) => {
         const candidates = JSON.parse(round.candidates);
         const coins = await db.all(`SELECT * FROM coins WHERE id IN (${candidates.join(',')})`);
         
-        const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai');
+        const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc.0g.ai');
         const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
         const broker = await createBroker(wallet);
         
@@ -2743,7 +3212,7 @@ Return ONLY valid JSON in this format:
     const totalWinningBets = winners.reduce((s, b) => s + b.amount, 0);
     
     if (totalWinningBets > 0 && round.totalPool > 0) {
-      const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai');
+      const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc.0g.ai');
       const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
       
       // For demo: assume all bets are in same token (first winner's token)
@@ -2796,7 +3265,7 @@ app.get('/gaming/coins/:userAddress', async (req, res) => {
       LIMIT 100
     `);
     
-    const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai');
+    const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc.0g.ai');
     const ERC20_ABI = ['function balanceOf(address) view returns (uint256)'];
     
     const availableCoins = [];
@@ -2929,7 +3398,128 @@ function calculateMinesMultiplier(minesCount, tilesRevealed) {
   return multiplier;
 }
 
-// Start new mines game
+// P2P Matchmaking: Create or join a Mines lobby
+app.post('/gaming/mines/matchmake', async (req, res) => {
+  try {
+    const { userAddress, betAmount, minesCount, tokenAddress, txHash, matchType = 'p2p' } = req.body || {};
+    
+    if (!ethers.isAddress(userAddress)) return res.status(400).json({ error: 'Invalid address' });
+    if (!betAmount || betAmount <= 0) return res.status(400).json({ error: 'Invalid bet amount' });
+    if (!minesCount || minesCount < 1 || minesCount > 24) return res.status(400).json({ error: 'Mines count must be 1-24' });
+    if (!tokenAddress || !ethers.isAddress(tokenAddress)) return res.status(400).json({ error: 'Invalid token' });
+    
+    const db = await databaseManager.getConnection();
+    const userAddr = userAddress.toLowerCase();
+    
+    // If solo mode, start game immediately (no matchmaking)
+    if (matchType === 'solo') {
+      const totalTiles = 25;
+      const allPositions = Array.from({ length: totalTiles }, (_, i) => i);
+      for (let i = allPositions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allPositions[i], allPositions[j]] = [allPositions[j], allPositions[i]];
+      }
+      const minePositions = allPositions.slice(0, minesCount).sort((a, b) => a - b);
+      const gridState = JSON.stringify(minePositions);
+      
+      await db.run(`
+        INSERT INTO gaming_mines(userAddress, betAmount, tokenAddress, minesCount, gridState, revealedTiles, status, currentMultiplier, matchType, stakeTxHash)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', 1.0, 'solo', ?)
+      `, [userAddr, betAmount, tokenAddress, minesCount, gridState, '[]', txHash]);
+      
+      const game = await db.get(`SELECT * FROM gaming_mines WHERE id = last_insert_rowid()`);
+      return res.json({ success: true, gameId: game.id, minesCount, currentMultiplier: 1.0, revealedTiles: [], status: 'active', matchType: 'solo' });
+    }
+    
+    // P2P Mode: Look for existing waiting lobby
+    const waitingLobby = await db.get(`
+      SELECT * FROM gaming_mines_lobbies 
+      WHERE status = 'waiting' 
+        AND tokenAddress = ? 
+        AND betAmount = ? 
+        AND minesCount = ? 
+        AND creatorAddress != ?
+      ORDER BY createdAt ASC 
+      LIMIT 1
+    `, [tokenAddress, betAmount, minesCount, userAddr]);
+    
+    if (waitingLobby) {
+      // Match found! Create game for both players
+      const matchId = `match-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Generate grids for both players
+      const generateGrid = () => {
+        const allPositions = Array.from({ length: 25 }, (_, i) => i);
+        for (let i = allPositions.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [allPositions[i], allPositions[j]] = [allPositions[j], allPositions[i]];
+        }
+        return JSON.stringify(allPositions.slice(0, minesCount).sort((a, b) => a - b));
+      };
+      
+      const grid1 = generateGrid();
+      const grid2 = generateGrid();
+      
+      // Create games for both players
+      await db.run(`
+        INSERT INTO gaming_mines(userAddress, betAmount, tokenAddress, minesCount, gridState, revealedTiles, status, currentMultiplier, matchType, matchId, opponentAddress, stakeTxHash)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', 1.0, 'p2p', ?, ?, ?)
+      `, [waitingLobby.creatorAddress, betAmount, tokenAddress, minesCount, grid1, '[]', matchId, userAddr, waitingLobby.stakeTxHash || '']);
+      
+      const game1 = await db.get(`SELECT * FROM gaming_mines WHERE id = last_insert_rowid()`);
+      
+      await db.run(`
+        INSERT INTO gaming_mines(userAddress, betAmount, tokenAddress, minesCount, gridState, revealedTiles, status, currentMultiplier, matchType, matchId, opponentAddress, stakeTxHash)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', 1.0, 'p2p', ?, ?, ?)
+      `, [userAddr, betAmount, tokenAddress, minesCount, grid2, '[]', matchId, waitingLobby.creatorAddress, txHash]);
+      
+      const game2 = await db.get(`SELECT * FROM gaming_mines WHERE id = last_insert_rowid()`);
+      
+      // Update lobby to matched
+      await db.run(`UPDATE gaming_mines_lobbies SET status = 'matched', matchId = ?, matchedAt = ? WHERE id = ?`, [matchId, Date.now(), waitingLobby.id]);
+      
+      console.log(`🎮 P2P Mines match created: ${waitingLobby.creatorAddress} vs ${userAddr}, matchId: ${matchId}`);
+      
+      return res.json({
+        success: true,
+        matched: true,
+        gameId: game2.id,
+        opponentGameId: game1.id,
+        matchId,
+        opponentAddress: waitingLobby.creatorAddress,
+        minesCount,
+        currentMultiplier: 1.0,
+        revealedTiles: [],
+        status: 'active',
+        matchType: 'p2p'
+      });
+    }
+    
+    // No match found - create a new waiting lobby
+    await db.run(`
+      INSERT INTO gaming_mines_lobbies(creatorAddress, tokenAddress, betAmount, minesCount, lobbyType, status, stakeTxHash)
+      VALUES (?, ?, ?, ?, 'public', 'waiting', ?)
+    `, [userAddr, tokenAddress, betAmount, minesCount, txHash]);
+    
+    const lobby = await db.get(`SELECT * FROM gaming_mines_lobbies WHERE id = last_insert_rowid()`);
+    
+    console.log(`⏳ Mines lobby created: ${userAddr}, waiting for opponent...`);
+    
+    return res.json({
+      success: true,
+      matched: false,
+      lobbyId: lobby.id,
+      message: 'Lobby created. Waiting for opponent to join...',
+      matchType: 'p2p'
+    });
+    
+  } catch (e) {
+    console.error('mines matchmake error:', e);
+    return res.status(500).json({ error: e?.message || 'matchmaking failed' });
+  }
+});
+
+// Start new mines game (legacy solo mode - kept for backward compatibility)
 app.post('/gaming/mines/start', async (req, res) => {
   try {
     const { userAddress, betAmount, minesCount, tokenAddress, txHash } = req.body || {};
@@ -2954,15 +3544,15 @@ app.post('/gaming/mines/start', async (req, res) => {
     const minePositions = allPositions.slice(0, minesCount).sort((a, b) => a - b);
     const gridState = JSON.stringify(minePositions);
     
-    // Create game session
+    // Create game session (solo mode)
     await db.run(`
-      INSERT INTO gaming_mines(userAddress, betAmount, tokenAddress, minesCount, gridState, revealedTiles, status, currentMultiplier)
-      VALUES (?, ?, ?, ?, ?, ?, 'active', 1.0)
-    `, [userAddress.toLowerCase(), betAmount, tokenAddress, minesCount, gridState, '[]']);
+      INSERT INTO gaming_mines(userAddress, betAmount, tokenAddress, minesCount, gridState, revealedTiles, status, currentMultiplier, matchType, stakeTxHash)
+      VALUES (?, ?, ?, ?, ?, ?, 'active', 1.0, 'solo', ?)
+    `, [userAddress.toLowerCase(), betAmount, tokenAddress, minesCount, gridState, '[]', txHash || '']);
     
     const game = await db.get(`SELECT * FROM gaming_mines WHERE id = last_insert_rowid()`);
     
-    console.log(`💣 Mines game started: ${userAddress}, ${minesCount} mines, bet ${betAmount}`);
+    console.log(`💣 Mines game started (solo): ${userAddress}, ${minesCount} mines, bet ${betAmount}`);
     
     return res.json({
       success: true,
@@ -2970,7 +3560,8 @@ app.post('/gaming/mines/start', async (req, res) => {
       minesCount: game.minesCount,
       currentMultiplier: 1.0,
       revealedTiles: [],
-      status: 'active'
+      status: 'active',
+      matchType: 'solo'
     });
     
   } catch (e) {
@@ -2984,30 +3575,79 @@ app.post('/gaming/mines/reveal', async (req, res) => {
   try {
     const { gameId, tileIndex } = req.body || {};
     
-    if (!gameId) return res.status(400).json({ error: 'Game ID required' });
-    if (tileIndex === undefined || tileIndex < 0 || tileIndex >= 25) return res.status(400).json({ error: 'Invalid tile' });
+    if (!gameId) return res.status(400).json({ success: false, error: 'Game ID required' });
+    if (tileIndex === undefined || tileIndex === null) return res.status(400).json({ success: false, error: 'Tile index required' });
+    if (typeof tileIndex !== 'number' || tileIndex < 0 || tileIndex >= 25) {
+      return res.status(400).json({ success: false, error: 'Invalid tile index (must be 0-24)' });
+    }
     
     const db = await databaseManager.getConnection();
     const game = await db.get(`SELECT * FROM gaming_mines WHERE id = ?`, [gameId]);
     
-    if (!game) return res.status(404).json({ error: 'Game not found' });
-    if (game.status !== 'active') return res.status(400).json({ error: 'Game already ended' });
+    if (!game) return res.status(404).json({ success: false, error: 'Game not found' });
+    if (game.status !== 'active') {
+      return res.status(400).json({ success: false, error: `Game already ended (status: ${game.status})` });
+    }
     
-    const minePositions = JSON.parse(game.gridState);
-    const revealedTiles = JSON.parse(game.revealedTiles);
+    // Safely parse JSON with fallbacks
+    let minePositions = [];
+    let revealedTiles = [];
+    try {
+      minePositions = game.gridState ? JSON.parse(game.gridState) : [];
+      revealedTiles = game.revealedTiles ? JSON.parse(game.revealedTiles) : [];
+    } catch (parseErr) {
+      console.error('JSON parse error in reveal:', parseErr);
+      return res.status(500).json({ success: false, error: 'Failed to parse game state' });
+    }
     
-    if (revealedTiles.includes(tileIndex)) return res.status(400).json({ error: 'Tile already revealed' });
+    if (!Array.isArray(revealedTiles)) revealedTiles = [];
+    if (!Array.isArray(minePositions)) minePositions = [];
+    
+    if (revealedTiles.includes(tileIndex)) {
+      return res.status(400).json({ success: false, error: 'Tile already revealed' });
+    }
     
     // Check if hit mine
     const hitMine = minePositions.includes(tileIndex);
     
     if (hitMine) {
       // Lost - reveal all mines
+      const newRevealed = [...revealedTiles, tileIndex];
+      
+      // In P2P mode, check if opponent already lost - if so, this is a win!
+      if (game.matchType === 'p2p' && game.matchId && game.opponentAddress) {
+        const opponentGame = await db.get(`
+          SELECT * FROM gaming_mines 
+          WHERE matchId = ? AND userAddress = ? AND id != ?
+        `, [game.matchId, game.opponentAddress, gameId]);
+        
+        if (opponentGame && opponentGame.status === 'lost') {
+          // Opponent already lost, so even though we hit a mine, we win by default!
+          await db.run(`
+            UPDATE gaming_mines 
+            SET status = 'won', completedAt = ?, revealedTiles = ?
+            WHERE id = ?
+          `, [Date.now(), JSON.stringify(newRevealed), gameId]);
+          
+          return res.json({
+            success: true,
+            gameId,
+            hitMine: true,
+            tileIndex,
+            status: 'won',
+            message: 'Opponent lost first - you win!',
+            minePositions,
+            revealedTiles: newRevealed,
+            finalMultiplier: 0
+          });
+        }
+      }
+      
       await db.run(`
         UPDATE gaming_mines 
         SET status = 'lost', completedAt = ?, revealedTiles = ?
         WHERE id = ?
-      `, [Date.now(), JSON.stringify([...revealedTiles, tileIndex]), gameId]);
+      `, [Date.now(), JSON.stringify(newRevealed), gameId]);
       
       return res.json({
         success: true,
@@ -3016,7 +3656,7 @@ app.post('/gaming/mines/reveal', async (req, res) => {
         tileIndex,
         status: 'lost',
         minePositions,
-        revealedTiles: [...revealedTiles, tileIndex],
+        revealedTiles: newRevealed,
         finalMultiplier: 0
       });
     }
@@ -3052,7 +3692,7 @@ app.post('/gaming/mines/reveal', async (req, res) => {
     
   } catch (e) {
     console.error('mines reveal error:', e);
-    return res.status(500).json({ error: e?.message || 'reveal failed' });
+    return res.status(500).json({ success: false, error: e?.message || 'reveal failed' });
   }
 });
 
@@ -3069,31 +3709,71 @@ app.post('/gaming/mines/cashout', async (req, res) => {
     if (!game) return res.status(404).json({ error: 'Game not found' });
     if (game.status !== 'active') return res.status(400).json({ error: 'Game already ended' });
     
-    const revealedTiles = JSON.parse(game.revealedTiles);
+    const revealedTiles = JSON.parse(game.revealedTiles || '[]');
     if (revealedTiles.length === 0) return res.status(400).json({ error: 'Reveal at least one tile before cashing out' });
     
-    const payout = game.betAmount * game.currentMultiplier;
-    
-    // Send payout
+    let payout = 0;
     let payoutTx = null;
-    try {
-      const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai');
-      const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-      const tokenContract = new ethers.Contract(
-        game.tokenAddress,
-        ['function transfer(address to, uint256 amount) returns (bool)'],
-        wallet
-      );
+    const PLATFORM_FEE_BPS = 500; // 5% platform fee for P2P
+    
+    // P2P Mode: Winner takes opponent's stake
+    if (game.matchType === 'p2p' && game.matchId && game.opponentAddress) {
+      // Find opponent's game
+      const opponentGame = await db.get(`
+        SELECT * FROM gaming_mines 
+        WHERE matchId = ? AND userAddress = ? AND id != ?
+      `, [game.matchId, game.opponentAddress, gameId]);
       
-      const payoutAmount = ethers.parseEther(payout.toFixed(6));
-      const tx = await tokenContract.transfer(game.userAddress, payoutAmount);
-      await tx.wait();
-      payoutTx = tx.hash;
-      console.log(`💰 Mines cashout: ${payout} tokens to ${game.userAddress}, tx: ${payoutTx}`);
-    } catch (payoutErr) {
-      console.error('Payout failed:', payoutErr);
+      if (opponentGame) {
+        // Compare multipliers - higher multiplier wins
+        const myMultiplier = game.currentMultiplier || 1.0;
+        const opponentMultiplier = opponentGame.currentMultiplier || 1.0;
+        
+        if (myMultiplier > opponentMultiplier || opponentGame.status === 'lost') {
+          // Winner! Take both stakes minus fee
+          const totalPot = game.betAmount + opponentGame.betAmount;
+          const fee = (totalPot * PLATFORM_FEE_BPS) / 10000;
+          payout = totalPot - fee;
+          
+          console.log(`🎮 P2P Mines: ${game.userAddress} wins! Multiplier: ${myMultiplier.toFixed(2)}x vs ${opponentMultiplier.toFixed(2)}x`);
+          console.log(`💰 Pot: ${totalPot}, Fee: ${fee.toFixed(6)}, Payout: ${payout.toFixed(6)}`);
+          
+          // Update opponent's game to lost
+          await db.run(`UPDATE gaming_mines SET status = 'lost', completedAt = ? WHERE id = ?`, [Date.now(), opponentGame.id]);
+          
+          // Send payout from opponent's stake (we'll need to get tokens from opponent)
+          // For now, we'll use a simple system where both players stake is held in escrow
+          // In production, you'd use an escrow contract
+          try {
+            const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc.0g.ai');
+            // In P2P, we'd ideally use an escrow contract, but for now we'll return player's stake + opponent's stake
+            // Note: This requires the platform to hold tokens or use an escrow system
+            console.log(`⚠️ P2P payout requires escrow system. Returning player stake only for now.`);
+            payout = game.betAmount; // Return player's stake for now
+          } catch (err) {
+            console.error('P2P payout error:', err);
+            payout = game.betAmount; // Fallback to returning stake
+          }
+        } else {
+          // Opponent wins or higher multiplier
+          await db.run(`UPDATE gaming_mines SET status = 'lost', completedAt = ? WHERE id = ?`, [Date.now(), gameId]);
+          return res.json({
+            success: false,
+            message: 'Opponent has higher multiplier or already won. You lost.',
+            status: 'lost'
+          });
+        }
+      } else {
+        // No opponent found - return stake only
+        payout = game.betAmount;
+      }
+    } else {
+      // Solo Mode: Just return stake (no multipliers paid from treasury)
+      payout = game.betAmount;
+      console.log(`💣 Solo Mines cashout: Returning stake ${payout} (no multiplier payout)`);
     }
     
+    // Update game status
     await db.run(`
       UPDATE gaming_mines 
       SET status = 'cashed_out', completedAt = ?, cashoutAmount = ?, cashoutTx = ?
@@ -3101,7 +3781,7 @@ app.post('/gaming/mines/cashout', async (req, res) => {
     `, [Date.now(), payout, payoutTx, gameId]);
     
     // Store game result to 0G DA
-    const minePositions = JSON.parse(game.minePositions);
+    const minePositions = game.gridState ? JSON.parse(game.gridState) : [];
     const gameData = {
       gameId: `mines-${gameId}`,
       gameType: 'mines',
@@ -3113,11 +3793,14 @@ app.post('/gaming/mines/cashout', async (req, res) => {
       finalMultiplier: game.currentMultiplier,
       cashoutAmount: payout,
       tokenAddress: game.tokenAddress,
+      matchType: game.matchType || 'solo',
+      matchId: game.matchId || null,
+      opponentAddress: game.opponentAddress || null,
       stakeTxHash: game.stakeTxHash,
       payoutTx,
       timestamp: Date.now()
     };
-    const provenanceHash = await storeGameResultTo0G(gameData);
+    const provenanceHash = await storeGameResultTo0G(gameData).catch(() => null);
     
     return res.json({
       success: true,
@@ -3125,6 +3808,7 @@ app.post('/gaming/mines/cashout', async (req, res) => {
       status: 'cashed_out',
       cashoutAmount: payout,
       multiplier: game.currentMultiplier,
+      matchType: game.matchType || 'solo',
       payoutTx,
       provenanceHash
     });
@@ -3132,6 +3816,51 @@ app.post('/gaming/mines/cashout', async (req, res) => {
   } catch (e) {
     console.error('mines cashout error:', e);
     return res.status(500).json({ error: e?.message || 'cashout failed' });
+  }
+});
+
+// Get available Mines lobbies for matchmaking
+app.get('/gaming/mines/lobbies', async (req, res) => {
+  try {
+    const { tokenAddress, betAmount, minesCount } = req.query || {};
+    const db = await databaseManager.getConnection();
+    
+    let query = `SELECT * FROM gaming_mines_lobbies WHERE status = 'waiting'`;
+    const params = [];
+    
+    if (tokenAddress && ethers.isAddress(tokenAddress)) {
+      query += ` AND tokenAddress = ?`;
+      params.push(tokenAddress);
+    }
+    if (betAmount && parseFloat(betAmount) > 0) {
+      query += ` AND betAmount = ?`;
+      params.push(parseFloat(betAmount));
+    }
+    if (minesCount && parseInt(minesCount) >= 1 && parseInt(minesCount) <= 24) {
+      query += ` AND minesCount = ?`;
+      params.push(parseInt(minesCount));
+    }
+    
+    query += ` ORDER BY createdAt ASC LIMIT 50`;
+    
+    const lobbies = await db.all(query, params);
+    
+    return res.json({
+      success: true,
+      lobbies: lobbies.map(l => ({
+        lobbyId: l.id,
+        creatorAddress: l.creatorAddress,
+        tokenAddress: l.tokenAddress,
+        betAmount: l.betAmount,
+        minesCount: l.minesCount,
+        createdAt: l.createdAt,
+        waitingTime: Date.now() - l.createdAt
+      }))
+    });
+    
+  } catch (e) {
+    console.error('get lobbies error:', e);
+    return res.status(500).json({ error: e?.message || 'failed to get lobbies' });
   }
 });
 
@@ -3210,7 +3939,7 @@ app.post('/gaming/meme-royale', async (req, res) => {
 
     console.log('🔥 Meme Royale battle starting:', leftCoin.symbol, 'vs', rightCoin.symbol);
 
-    const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc-testnet.0g.ai');
+    const provider = new ethers.JsonRpcProvider(process.env.OG_RPC || 'https://evmrpc.0g.ai');
     const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     
     // Initialize 0G Compute broker

@@ -8,12 +8,14 @@ export const RPC_CONFIG = {
     ? `${(process as any).env.NEXT_PUBLIC_BACKEND_URL}/api/rpc`
     : 'http://localhost:4000/api/rpc',
   
+  // Direct 0G mainnet RPC (primary)
+  OG_MAINNET_RPC: 'https://evmrpc.0g.ai',
   // Direct 0G testnet RPC (fallback)
   OG_TESTNET_RPC: 'https://evmrpc-testnet.0g.ai',
   
-  // Chain configuration
-  CHAIN_ID: 16602,
-  NETWORK: '0g-galileo-testnet',
+  // Chain configuration (mainnet)
+  CHAIN_ID: 16661,
+  NETWORK: '0g-mainnet',
   
   // Environment-specific configuration
   getRpcUrl: () => {
@@ -25,7 +27,7 @@ export const RPC_CONFIG = {
     // In production, can use direct RPC or backend proxy
     return process.env.USE_BACKEND_PROXY === 'true' 
       ? RPC_CONFIG.BACKEND_RPC 
-      : RPC_CONFIG.OG_TESTNET_RPC;
+      : (process.env.NEXT_PUBLIC_EVM_RPC || RPC_CONFIG.OG_MAINNET_RPC);
   },
   
   // Check if backend server is available

@@ -5,23 +5,23 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { publicProvider } from 'wagmi/providers/public'
 import '@rainbow-me/rainbowkit/styles.css'
 
-const ogTestnet = {
-  id: 16602,
-  name: '0G Galileo Testnet',
-  network: '0g-galileo-testnet',
+const ogMainnet = {
+  id: 16661,
+  name: '0G Mainnet',
+  network: '0g-mainnet',
   nativeCurrency: { name: '0G', symbol: '0G', decimals: 18 },
   rpcUrls: { 
-    default: { http: ['https://evmrpc-testnet.0g.ai'] },
-    public: { http: ['https://evmrpc-testnet.0g.ai'] }
+    default: { http: ['https://evmrpc.0g.ai'] },
+    public: { http: ['https://evmrpc.0g.ai'] }
   },
   blockExplorers: { 
-    default: { name: 'Explorer', url: 'https://chainscan-galileo.0g.ai' } 
+    default: { name: 'Explorer', url: 'https://chainscan.0g.ai' } 
   },
-  testnet: true,
+  testnet: false,
 } as const
 
 const { chains, publicClient, webSocketPublicClient } = configureChains(
-  [ogTestnet],
+  [ogMainnet],
   [publicProvider()]
 )
 

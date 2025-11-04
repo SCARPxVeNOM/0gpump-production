@@ -297,8 +297,8 @@ class OGStorageSDK {
 
 // Create and export a configured instance
 export const ogStorageSDK = new OGStorageSDK({
-	evmRpc: process.env.NEXT_PUBLIC_EVM_RPC || 'https://evmrpc-testnet.0g.ai',
-	indexerRpc: process.env.NEXT_PUBLIC_INDEXER_RPC || 'https://indexer-storage-testnet-turbo.0g.ai',
+	evmRpc: process.env.NEXT_PUBLIC_EVM_RPC || 'https://evmrpc.0g.ai',
+	indexerRpc: process.env.NEXT_PUBLIC_INDEXER_RPC || 'https://indexer-storage-turbo.0g.ai',
 	privateKey: process.env.NEXT_PUBLIC_PRIVATE_KEY || '',
 	backendUrl: process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000'
 });

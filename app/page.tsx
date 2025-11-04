@@ -60,6 +60,9 @@ const categories = [
 
 export default function App() {
   const { isConnected, address } = useAccount()
+  
+  // Backend base URL - define once at component level
+  const backendBase = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_BACKEND_URL) || 'http://localhost:4000'
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false)
   const [trendingCoins, setTrendingCoins] = useState<ExtendedCoinData[]>([])
   const [allCoins, setAllCoins] = useState<ExtendedCoinData[]>([]) // Store all coins for search
@@ -229,7 +232,6 @@ export default function App() {
 
       // Persist to backend server so the coin appears across browsers/devices
       try {
-        const backendBase = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_BACKEND_URL) || 'http://localhost:4000'
         await fetch(`${backendBase}/createCoin`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -474,7 +476,6 @@ export default function App() {
                   onClick={async () => {
                     setIsLoading(true);
                     try {
-                      const backendBase = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_BACKEND_URL) || 'http://localhost:4000'
                       const res = await fetch(`${backendBase}/coins`, { cache: 'no-store' });
                       if (res.ok) {
                         const data = await res.json();
@@ -599,8 +600,8 @@ export default function App() {
                       tokenName={coin.name}
                       tokenSymbol={coin.symbol}
                       description={coin.description || ''}
-                      imageUrl={coin.imageUrl}
-                      metadataUrl={coin.imageUrl}
+                      imageUrl={coin.imageUrl || (coin.imageHash ? `${backendBase}/download/${coin.imageHash}` : undefined)}
+                      metadataUrl={coin.imageUrl || (coin.imageHash ? `${backendBase}/download/${coin.imageHash}` : undefined)}
                       creator={coin.creator}
                       createdAt={coin.createdAt}
                       curveAddress={coin.curveAddress || undefined}

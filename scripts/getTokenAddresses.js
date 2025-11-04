@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { ethers } = require("hardhat");
 
 async function main() {
@@ -6,8 +7,12 @@ async function main() {
   // Connect to 0G testnet
   const provider = new ethers.providers.JsonRpcProvider("https://evmrpc-testnet.0g.ai");
   
-  // Your wallet address (derived from private key)
-  const privateKey = "8c6f10acb86aeab293bd60bcf7d0e69f70643f8d219b81b6665885844abc3a9c";
+  // Get private key from environment variables (0G best practice)
+  const privateKey = process.env.PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
+  if (!privateKey) {
+    throw new Error('PRIVATE_KEY or DEPLOYER_PRIVATE_KEY must be set in environment variables');
+  }
+  
   const wallet = new ethers.Wallet(privateKey, provider);
   
   console.log("Wallet address:", wallet.address);

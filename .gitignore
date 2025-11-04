@@ -32,6 +32,10 @@ Thumbs.db
 # Local data
 server/database.sqlite
 data/*.db
+data/*.db-shm
+data/*.db-wal
+data/uploads-cache/
+data/profiles/
 uploads/
 0g-storage-ts-starter-kit/uploads/
 0g-storage-ts-starter-kit/downloads/
