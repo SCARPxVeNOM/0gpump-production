@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![0G Pump](public/og-logo.jpg)
+![0G Pump](public/og-logo1.png)
 
 **The Ultimate Pump.fun Experience on 0G Chain**
 
