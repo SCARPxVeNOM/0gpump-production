@@ -212,7 +212,7 @@ async function initializeOGSdkOnce() {
 // -----------------------------
 // Direct SDK helpers
 // -----------------------------
-async function uploadBufferDirect(buffer, filename) {
+async function uploadBufferDirect(buffer, filename, retries = 3) {
   await initializeOGSdkOnce();
   if (!ogIndexer || !ogSigner) throw new Error('0G SDK not initialized');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), '0g-upload-'));
@@ -222,31 +222,71 @@ async function uploadBufferDirect(buffer, filename) {
     const zgFile = await ZgFile.fromFilePath(tempFile);
     const [tree, treeErr] = await zgFile.merkleTree();
     if (treeErr) throw new Error(String(treeErr));
-    // Submit upload with timeout fallback to avoid UI hanging
-    const submitPromise = ogIndexer.upload(zgFile, ogRpcUrl, ogSigner);
-    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([null, new Error('upload-timeout')]), 20000));
-    const result = await Promise.race([submitPromise, timeoutPromise]);
-    const [tx, uploadErr] = result;
-    if (uploadErr && String(uploadErr) !== 'Error: upload-timeout') throw new Error(String(uploadErr));
     const rootHash = tree.rootHash();
-    await zgFile.close();
-    try { fs.unlinkSync(tempFile); fs.rmdirSync(tempDir); } catch {}
-    // Save a local cache copy for immediate serving
-    try {
-      ensureUploadsCacheDir();
-      const cachePath = path.join(UPLOADS_CACHE_DIR, rootHash);
-      if (!fs.existsSync(cachePath)) {
-        fs.writeFileSync(cachePath, buffer);
+    
+    // Retry logic for 502 Bad Gateway errors
+    let lastError = null;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        // Submit upload with timeout fallback to avoid UI hanging
+        const submitPromise = ogIndexer.upload(zgFile, ogRpcUrl, ogSigner);
+        const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([null, new Error('upload-timeout')]), 20000));
+        const result = await Promise.race([submitPromise, timeoutPromise]);
+        const [tx, uploadErr] = result;
+        
+        if (uploadErr) {
+          const errorMsg = String(uploadErr);
+          // Check if it's a 502 Bad Gateway or network error
+          if (errorMsg.includes('502') || errorMsg.includes('Bad Gateway') || errorMsg.includes('ERR_BAD_RESPONSE')) {
+            if (attempt < retries) {
+              const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff, max 5s
+              console.warn(`⚠️  Upload attempt ${attempt}/${retries} failed with 502. Retrying in ${delay}ms...`);
+              await new Promise(r => setTimeout(r, delay));
+              continue;
+            }
+          }
+          if (errorMsg !== 'Error: upload-timeout') {
+            throw new Error(errorMsg);
+          }
+        }
+        
+        await zgFile.close();
+        try { fs.unlinkSync(tempFile); fs.rmdirSync(tempDir); } catch {}
+        // Save a local cache copy for immediate serving
+        try {
+          ensureUploadsCacheDir();
+          const cachePath = path.join(UPLOADS_CACHE_DIR, rootHash);
+          if (!fs.existsSync(cachePath)) {
+            fs.writeFileSync(cachePath, buffer);
+          }
+        } catch {}
+        return { rootHash, txHash: tx ? (tx.hash || tx) : null, pending: !tx };
+      } catch (e) {
+        lastError = e;
+        const errorMsg = String(e);
+        // Retry on 502 errors
+        if ((errorMsg.includes('502') || errorMsg.includes('Bad Gateway') || errorMsg.includes('ERR_BAD_RESPONSE')) && attempt < retries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+          console.warn(`⚠️  Upload attempt ${attempt}/${retries} failed. Retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw e;
       }
-    } catch {}
-    return { rootHash, txHash: tx ? (tx.hash || tx) : null, pending: !tx };
+    }
+    throw lastError || new Error('Upload failed after retries');
   } catch (e) {
     try { fs.unlinkSync(tempFile); fs.rmdirSync(tempDir); } catch {}
+    // Provide user-friendly error message for 502 errors
+    const errorMsg = String(e);
+    if (errorMsg.includes('502') || errorMsg.includes('Bad Gateway')) {
+      throw new Error('0G Storage indexer is temporarily unavailable. Please try again in a few moments.');
+    }
     throw e;
   }
 }
 
-async function downloadRootToStream(rootHash, res) {
+async function downloadRootToStream(rootHash, res, retries = 3) {
   await initializeOGSdkOnce();
   if (!ogIndexer) throw new Error('0G SDK not initialized');
   // Serve from local cache first if available
@@ -266,24 +306,58 @@ async function downloadRootToStream(rootHash, res) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), '0g-download-'));
   const tempFile = path.join(tempDir, rootHash);
   try {
-    // Try a few times in case the write just landed and not yet replicated
-    let err = await ogIndexer.download(rootHash, tempFile, true);
-    if (err) {
-      await new Promise(r => setTimeout(r, 1500));
-      err = await ogIndexer.download(rootHash, tempFile, true);
+    // Retry logic for 502 Bad Gateway errors
+    let lastError = null;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        let err = await ogIndexer.download(rootHash, tempFile, true);
+        if (err) {
+          const errorMsg = String(err);
+          // Check if it's a 502 Bad Gateway error
+          if ((errorMsg.includes('502') || errorMsg.includes('Bad Gateway') || errorMsg.includes('ERR_BAD_RESPONSE')) && attempt < retries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff
+            console.warn(`⚠️  Download attempt ${attempt}/${retries} failed with 502. Retrying in ${delay}ms...`);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          // For other errors, try one more time after a short delay (replication delay)
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, 1500));
+            err = await ogIndexer.download(rootHash, tempFile, true);
+          }
+          if (err) throw new Error(String(err));
+        }
+        const stat = fs.statSync(tempFile);
+        res.set({
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': stat.size,
+          'Cache-Control': 'public, max-age=31536000'
+        });
+        const stream = fs.createReadStream(tempFile);
+        stream.on('close', () => { try { fs.unlinkSync(tempFile); fs.rmdirSync(tempDir); } catch {} });
+        stream.pipe(res);
+        return; // Success, exit retry loop
+      } catch (e) {
+        lastError = e;
+        const errorMsg = String(e);
+        // Retry on 502 errors
+        if ((errorMsg.includes('502') || errorMsg.includes('Bad Gateway') || errorMsg.includes('ERR_BAD_RESPONSE')) && attempt < retries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+          console.warn(`⚠️  Download attempt ${attempt}/${retries} failed. Retrying in ${delay}ms...`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw e;
+      }
     }
-    if (err) throw new Error(String(err));
-    const stat = fs.statSync(tempFile);
-    res.set({
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': stat.size,
-      'Cache-Control': 'public, max-age=31536000'
-    });
-    const stream = fs.createReadStream(tempFile);
-    stream.on('close', () => { try { fs.unlinkSync(tempFile); fs.rmdirSync(tempDir); } catch {} });
-    stream.pipe(res);
+    throw lastError || new Error('Download failed after retries');
   } catch (e) {
     try { fs.unlinkSync(tempFile); fs.rmdirSync(tempDir); } catch {}
+    // Provide user-friendly error message for 502 errors
+    const errorMsg = String(e);
+    if (errorMsg.includes('502') || errorMsg.includes('Bad Gateway')) {
+      throw new Error('0G Storage indexer is temporarily unavailable. Please try again in a few moments.');
+    }
     throw e;
   }
 }
